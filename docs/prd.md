@@ -1,30 +1,36 @@
 # Zigma Workspace PRD
 
-文档版本：v0.1
+文档版本：v0.2
 
 状态：草案
 
-日期：2026-07-13
+日期：2026-07-14
 
 仓库：`zigma-workspace`
 
 ## 1. 项目定位
 
-Zigma Workspace 是 Zigma 平台的工作区、worktree、依赖缓存、执行目录、快照和清理管理组件。它负责为 Agent workflow 和 runner 提供安全、可复用、可审计、可清理的项目工作目录。
+Zigma Workspace 是 Zigma 平台的工作区、worktree、依赖缓存、执行目录、快照和清理管理组件。它负责把“在某个代码仓库中执行一次 Agent 开发任务”转化为可创建、可锁定、可审计、可回收的文件系统上下文。
 
-Zigma Workspace 的目标是把“在某个仓库里执行一次开发任务”抽象成可管理的 Workspace 生命周期。它管理 Git checkout、worktree、branch、base commit、workspace lock、diff collection、dependency cache、snapshot、cleanup policy 和未来 sandbox integration。
+当前架构已移除 `zigma-runner`。因此 Zigma Workspace 不再定位为“给 runner 提供工作区”的服务，而是定位为 CLI/API-first 的工作区组件：`zigma-core` 可以直接调用它创建 workspace，`zigma-flow` 的 `script` / `check` step 也可以直接调用它的 CLI/API 来创建工作区、收集 diff、生成 snapshot 和执行 cleanup。
 
 一句话定义：
 
-Zigma Workspace 是 Zigma 的工作区控制面，负责把代码仓库转化为 runner 可以安全执行的隔离文件系统上下文。
+Zigma Workspace 是 Zigma 的工作区控制面，为 `zigma-flow` workflow 和 `zigma-core` 任务生命周期提供可审计、可复用、可清理的代码执行目录。
 
 ## 2. 背景
 
-`zigma-flow` 负责 workflow 状态推进，但不负责 Git worktree、执行目录隔离、依赖缓存和工作区清理。`zigma-runner` 为了在 Zigma 组件未完整安装时仍具备基本能力，会内置一部分 workspace 功能，例如通过 `git worktree` 创建工作区、收集 diff、清理目录。
+`zigma-flow` 负责 workflow 状态推进，但不负责长期 Git cache、worktree 管理、依赖缓存、workspace lock、snapshot 和清理策略。MVP 阶段，`zigma-flow` 的 script step 可以直接调用 `git worktree`、`git diff` 等命令完成基础流程；但随着 DataCat 开发任务复杂化，直接在 workflow 中手写 Git 操作会逐渐变得重复、脆弱且难以审计。
 
-随着 DataCat 开发任务变复杂，runner 内置能力会逐渐不足。多个任务并发执行、长期缓存、跨项目复用、workspace snapshot、可审计文件系统状态、沙箱隔离、依赖缓存管理，都需要独立组件承担。
+Zigma Workspace 的目标是把这些确定性文件系统和 Git 操作封装为稳定 CLI/API，使它们既能被 `zigma-core` 在 flow 启动前调用，也能被 `zigma-flow` script/check step 在 workflow 内显式调用。
 
-Zigma Workspace 是 runner 内置 workspace 兼容层的长期服务化形态。
+新的设计原则是：
+
+1. Workspace 不执行 Agent workflow。
+2. Workspace 不拥有任务流程。
+3. Workspace 不依赖 Runner。
+4. Workspace 提供 CLI-first 接口，方便 `zigma-flow` script/check step 直接使用。
+5. Workspace 长期可演进为服务化 API 和 sandbox provider。
 
 ## 3. 目标
 
@@ -32,54 +38,57 @@ Zigma Workspace 是 runner 内置 workspace 兼容层的长期服务化形态。
 
 1. 为每个 Zigma Task 或 Flow Run 创建独立 workspace。
 2. 支持 Git clone cache、bare mirror、worktree 和 branch 策略。
-3. 维护 workspace 生命周期：create、prepare、lock、run-bound、snapshot、archive、cleanup。
-4. 管理依赖缓存，降低 DataCat 等大型项目的重复安装和构建成本。
-5. 收集 workspace diff、changed files、untracked files 和 dirty state。
-6. 提供文件系统写入边界，防止任务越权修改 runtime state、secret 和其他 workspace。
-7. 为 runner 提供稳定 API，让 runner 不必自己管理复杂工作区。
-8. 为未来 Docker、devcontainer、Firecracker、远程执行节点预留 sandbox provider 接口。
+3. 维护 workspace 生命周期：create、prepare、lock、bind-run、snapshot、archive、cleanup。
+4. 提供 CLI 命令，供 `zigma-flow` script/check step 直接调用。
+5. 提供 API，供 `zigma-core` 在 flow 启动前创建或查询 workspace。
+6. 管理依赖缓存，降低 DataCat 等大型项目的重复安装和构建成本。
+7. 收集 workspace diff、changed files、untracked files、dirty state 和 patch artifact。
+8. 提供文件系统写入边界，防止任务越权修改 runtime state、secret 和其他 workspace。
+9. 为未来 Docker、devcontainer、Firecracker、远程执行节点预留 sandbox provider 接口。
 
 ## 4. 非目标范围
 
 Zigma Workspace 不承担以下职责：
 
-1. 不执行 Agent workflow。该职责属于 `zigma-flow` 和 `zigma-runner`。
-2. 不管理 Zigma Task 和项目权限。该职责属于 `zigma-core`。
+1. 不执行 Agent workflow。该职责属于 `zigma-flow`。
+2. 不管理 Zigma Task、Project、权限快照和审批。该职责属于 `zigma-core`。
 3. 不提供代码托管、Issue、PR、Review 平台。该职责属于 `zigma-code`。
-4. 不调用 GitHub API。平台早期 GitHub 操作由 `zigma-runner` 的 `gh` 组件承担。
-5. 不生成 Agent prompt，不解释 workflow DAG。
+4. 不调用 GitHub API，不创建 GitHub PR，不读取 GitHub Actions。MVP 阶段这些可由 `zigma-flow` script/check step 调用 `gh` 完成。
+5. 不生成 Agent prompt，不解释 workflow DAG，不修改 `zigma-flow` state。
 6. 不在 MVP 中实现强安全沙箱。MVP 先提供本地 worktree 隔离和路径策略。
 7. 不在 MVP 中实现分布式文件系统。
+8. 不实现或替代已删除的 `zigma-runner`。
 
 ## 5. 用户与使用者
 
-第一类使用者是 `zigma-runner`。Runner 请求 Workspace 创建工作区，并在其中执行 `zigma-flow`。
+第一类使用者是 `zigma-flow` workflow。Workflow 的 script/check step 可以调用 `zigma-workspace` CLI 来创建 workspace、绑定 run、收集 diff、生成 snapshot 或清理 workspace。
 
-第二类使用者是 `zigma-core`。Core 查询 workspace 状态、关联 task、触发清理策略。
+第二类使用者是 `zigma-core`。Core 可以在启动 flow 前调用 Workspace 创建执行目录，并把 WorkspaceRef 传入 flow inputs 或 context block。
 
 第三类使用者是平台管理员。他们配置 workspace root、缓存策略、保留策略、最大并发和磁盘限制。
 
-第四类使用者是未来 sandbox provider。Workspace 提供统一接口以支持容器和远程执行。
+第四类使用者是未来 `zigma-code` 或其他平台组件。它们可以查询 workspace 的 branch、commit、diff 和 snapshot，生成 PR 或审计记录。
 
 ## 6. 核心概念
 
 ### 6.1 Workspace
 
-Workspace 是一次任务或一组相关任务的文件系统上下文。
+Workspace 是一次任务使用的文件系统上下文。
 
 ```ts
 interface Workspace {
   id: string;
-  projectId: string;
-  repositoryId: string;
-  mode: "read-only" | "writable";
-  status: "creating" | "ready" | "locked" | "archived" | "cleaned" | "failed";
-  path: string;
+  projectId?: string;
+  taskId?: string;
+  flowRunId?: string;
+  repositoryId?: string;
+  repositoryUrl: string;
   baseRef: string;
   baseCommit: string;
-  branch?: string;
-  createdForTaskId?: string;
-  createdForFlowRunId?: string;
+  branch: string;
+  path: string;
+  mode: "read-only" | "writable";
+  status: "created" | "prepared" | "locked" | "active" | "archived" | "cleaned" | "failed";
   createdAt: string;
   updatedAt: string;
 }
@@ -87,18 +96,20 @@ interface Workspace {
 
 ### 6.2 Workspace Manifest
 
-Workspace Manifest 是写入 workspace 的机器可读元数据。
+Workspace Manifest 是写入 workspace 内或 workspace registry 的机器可读描述。
 
 ```json
 {
   "workspace_id": "ws_...",
   "project_id": "datacat",
-  "repository_id": "repo_...",
+  "task_id": "task_...",
+  "flow_run_id": "flow_...",
+  "repo": "https://github.com/LummiGhost/DataCat.git",
   "base_ref": "main",
   "base_commit": "...",
-  "branch": "zigma/datacat/task-...",
-  "mode": "writable",
+  "branch": "zigma/task-...",
   "path": "/zigma/workspaces/ws_...",
+  "mode": "writable",
   "allowed_paths": ["."],
   "denied_paths": [".env", ".zigma-flow/runs/*/state.json"]
 }
@@ -106,345 +117,338 @@ Workspace Manifest 是写入 workspace 的机器可读元数据。
 
 ### 6.3 Repository Cache
 
-Repository Cache 是本地 bare mirror 或 object cache，用于避免每个任务重复 clone。
+Repository Cache 是复用 clone/fetch 成本的本地 bare mirror 或 object cache。
 
 ```ts
 interface RepositoryCache {
   id: string;
-  repositoryId: string;
-  remoteUrl: string;
+  repositoryUrl: string;
   mirrorPath: string;
   lastFetchedAt?: string;
+  defaultBranch?: string;
   status: "ready" | "fetching" | "failed";
 }
 ```
 
 ### 6.4 Workspace Lock
 
-Workspace Lock 防止多个 runner 同时写入同一 writable workspace。
+Workspace Lock 防止多个流程同时写同一个工作区。
 
 ```ts
 interface WorkspaceLock {
   id: string;
   workspaceId: string;
   mode: "read" | "write";
-  holderId: string;
-  acquiredAt: string;
+  owner: string;
   expiresAt?: string;
+  acquiredAt: string;
 }
 ```
 
-### 6.5 Workspace Snapshot
+### 6.5 Workspace Diff
 
-Snapshot 是 workspace 在某个时间点的可审计状态记录。
-
-```ts
-interface WorkspaceSnapshot {
-  id: string;
-  workspaceId: string;
-  kind: "metadata" | "diff" | "archive";
-  baseCommit: string;
-  headCommit?: string;
-  diffRef?: string;
-  archiveRef?: string;
-  createdAt: string;
-}
-```
-
-### 6.6 Workspace Diff
-
-Workspace Diff 是任务结束后的代码变化摘要。
+Workspace Diff 是工作区变更证据。
 
 ```ts
 interface WorkspaceDiff {
   workspaceId: string;
   baseCommit: string;
   headCommit?: string;
-  changedFiles: ChangedFile[];
+  changedFiles: string[];
   untrackedFiles: string[];
+  statusText: string;
   patchPath?: string;
   summary: string;
 }
 ```
 
-### 6.7 Cache Profile
+### 6.6 Workspace Snapshot
 
-Cache Profile 定义依赖缓存策略。
+Snapshot 是工作区状态的可审计备份或引用。
 
 ```ts
-interface CacheProfile {
+interface WorkspaceSnapshot {
   id: string;
-  projectId?: string;
-  packageManagers: Array<"pnpm" | "npm" | "yarn" | "bun" | "cargo" | "pip" | "gradle">;
-  cachePaths: string[];
-  maxSizeBytes?: number;
-  ttlSeconds?: number;
+  workspaceId: string;
+  kind: "manifest" | "diff" | "archive" | "metadata-only";
+  path?: string;
+  checksum?: string;
+  createdAt: string;
 }
 ```
 
 ## 7. 功能需求
 
-### FR-001 Workspace 创建
+### FR-001 Workspace CLI
 
-Workspace 必须支持基于 repository、base ref、mode 和 task metadata 创建工作区。
+MVP 必须提供 CLI-first 接口。最低命令集：
 
-```ts
-interface CreateWorkspaceInput {
-  projectId: string;
-  repositoryId: string;
-  remoteUrl: string;
-  baseRef: string;
-  mode: "read-only" | "writable";
-  branch?: string;
-  taskId?: string;
-  flowRunId?: string;
+```bash
+zigma-workspace create --repo <url> --base <ref> --branch <branch> --mode writable
+zigma-workspace bind-run --workspace <id> --task <taskId> --flow-run <flowRunId>
+zigma-workspace status --workspace <id>
+zigma-workspace diff --workspace <id> --patch-out <path>
+zigma-workspace snapshot --workspace <id>
+zigma-workspace cleanup --workspace <id>
+```
+
+这些命令应适合直接放入 `zigma-flow` script/check step。
+
+### FR-002 Workspace 创建
+
+Workspace 必须能基于 repository URL、base ref、branch name 创建本地工作目录。
+
+创建流程：
+
+1. 确保 repository cache 存在。
+2. fetch base ref。
+3. resolve base commit。
+4. 创建 worktree。
+5. 创建或 checkout task branch。
+6. 写入 workspace manifest。
+7. 输出 JSON 结果，供 `zigma-flow` 解析。
+
+### FR-003 JSON 输出协议
+
+所有 CLI 命令必须支持 `--json`，输出机器可读结果。示例：
+
+```json
+{
+  "workspace_id": "ws_123",
+  "path": "/zigma/workspaces/ws_123",
+  "branch": "zigma/task-123",
+  "base_commit": "abc123",
+  "manifest_path": "/zigma/workspaces/ws_123/.zigma-workspace.json"
 }
 ```
 
-### FR-002 Repository Cache
+### FR-004 Workspace Registry
 
-必须支持本地 bare mirror 或等价 Git object cache。创建 workspace 时应优先复用 cache。
+Workspace 必须维护本地 registry。MVP 可使用 SQLite 或 JSONL。
 
-### FR-003 Worktree 管理
+记录内容包括 workspace、cache、lock、snapshot、cleanup status。
 
-writable workspace 必须使用独立 worktree 或等价隔离机制。read-only workspace 可以使用共享 checkout，但不得允许写入。
+### FR-005 Lock 管理
 
-### FR-004 Branch 策略
+Workspace 必须支持 read/write lock。写锁用于 Agent 修改、测试、格式化、生成代码等步骤。读锁用于 diff、summary、审计等步骤。
 
-必须支持自动生成任务分支名，并记录 branch 与 task、flow run 的关联。
+### FR-006 Diff Collection
 
-示例：
+Workspace 必须能收集：
 
-```text
-zigma/datacat/task-123-import-wizard
-zigma/datacat/run-20260713-0001
-```
-
-### FR-005 Workspace Lock
-
-必须支持 read lock 和 write lock。write lock 同一时间只能有一个 holder。lock 必须支持过期或强制释放策略。
-
-### FR-006 路径边界策略
-
-Workspace 必须支持 allowed_paths 和 denied_paths。MVP 先提供检测和警告，后续可通过 sandbox provider 强制执行。
-
-默认 denied paths 应包括：
-
-```text
-.env
-.env.*
-.zigma-flow/runs/*/state.json
-.zigma-flow/runs/*/events.jsonl
-.zigma-flow/config.json
-```
-
-### FR-007 Diff Collection
-
-任务结束后必须能收集：
-
-1. `git status`。
+1. `git status --porcelain`。
 2. changed files。
 3. untracked files。
-4. staged / unstaged changes。
-5. unified diff 或 patch file。
-6. diff summary。
+4. diff stat。
+5. patch file。
+6. base commit / current commit。
+7. dirty state summary。
 
-### FR-008 Snapshot
+Diff 输出必须能作为 `zigma-flow` artifact 注册。
 
-必须支持创建 metadata snapshot 和 diff snapshot。archive snapshot 可以在后续阶段实现。
+### FR-007 Path Policy
 
-### FR-009 Cleanup Policy
+Workspace 必须支持基础路径策略：
 
-必须支持按策略清理 workspace：
+1. denied paths，例如 `.env`、secret 文件、runtime state 文件。
+2. allowed paths。
+3. max file size。
+4. symlink policy。
+5. workspace root escape detection。
+
+MVP 阶段可以只做静态检查和 cleanup 前检查。
+
+### FR-008 Dependency Cache
+
+Workspace 应支持配置依赖缓存：
+
+1. pnpm store。
+2. npm cache。
+3. cargo cache。
+4. pip cache。
+5. Playwright browsers。
+6. build cache。
+
+MVP 可以先只提供 cache root 规划和 manifest 记录，不强制实现全部语言生态。
+
+### FR-009 Snapshot and Archive
+
+Workspace 必须支持生成 metadata snapshot 和 diff snapshot。后续可支持完整 archive。
+
+### FR-010 Cleanup Policy
+
+Workspace 必须支持 cleanup 策略：
+
+1. 成功任务立即清理。
+2. 失败任务保留 N 天。
+3. 人工 pin 保留。
+4. 超过磁盘阈值时清理最旧 workspace。
+5. orphan worktree 检测。
+
+### FR-011 API
+
+除了 CLI，Workspace 应提供可嵌入 API 或服务 API 草案：
 
 ```ts
-interface CleanupPolicy {
-  keepOnSuccess: boolean;
-  keepOnFailure: boolean;
-  ttlSeconds?: number;
-  maxWorkspacesPerProject?: number;
-  maxTotalSizeBytes?: number;
-}
-```
-
-### FR-010 Dependency Cache
-
-必须支持配置依赖缓存路径。MVP 可只提供路径挂载和清理，不实现智能依赖解析。
-
-### FR-011 Sandbox Provider 预留
-
-必须定义 sandbox provider 接口：
-
-```ts
-interface SandboxProvider {
-  prepare(workspace: Workspace): Promise<SandboxHandle>;
-  destroy(handle: SandboxHandle): Promise<void>;
-}
-```
-
-MVP provider 为 local filesystem。后续可扩展 Docker、devcontainer、Firecracker 或远程 runner。
-
-### FR-012 API
-
-```ts
-interface WorkspaceManagerApi {
+interface ZigmaWorkspaceApi {
   createWorkspace(input: CreateWorkspaceInput): Promise<Workspace>;
-  getWorkspace(id: string): Promise<Workspace>;
-  lockWorkspace(input: LockWorkspaceInput): Promise<WorkspaceLock>;
-  releaseLock(lockId: string): Promise<void>;
+  bindRun(input: BindWorkspaceRunInput): Promise<Workspace>;
+  getWorkspace(workspaceId: string): Promise<Workspace>;
+  lockWorkspace(workspaceId: string, mode: "read" | "write"): Promise<WorkspaceLock>;
   collectDiff(workspaceId: string): Promise<WorkspaceDiff>;
-  snapshotWorkspace(input: SnapshotWorkspaceInput): Promise<WorkspaceSnapshot>;
-  cleanupWorkspace(input: CleanupWorkspaceInput): Promise<void>;
-  getManifest(workspaceId: string): Promise<WorkspaceManifest>;
+  createSnapshot(workspaceId: string): Promise<WorkspaceSnapshot>;
+  cleanupWorkspace(workspaceId: string): Promise<void>;
 }
 ```
 
 ## 8. 数据模型
 
-推荐表：
+MVP 推荐 SQLite。核心表：
 
 ```text
 workspaces
+repository_caches
 workspace_locks
 workspace_snapshots
-repository_caches
-workspace_diffs
-cache_profiles
-cleanup_policies
 workspace_events
+cleanup_jobs
+path_policy_profiles
+cache_profiles
 ```
 
-文件系统布局建议：
+本地目录建议：
 
 ```text
-/zigma
+~/.zigma-workspace
+  /config.json
+  /registry.db
   /repo-cache
-    /<repository-id>.git
   /workspaces
-    /<workspace-id>
-      /.zigma-workspace.json
-      /repo
   /snapshots
-    /<workspace-id>
-  /artifacts
-    /<workspace-id>
+  /logs
 ```
 
-## 9. 与其他组件的关系
+## 9. 与其他组件关系
 
-### 9.1 与 zigma-runner
+### 9.1 与 zigma-flow
 
-Runner 是 Workspace 的主要调用方。MVP 阶段 runner 内置 worktree 兼容层，平台化后替换为调用 Workspace API。
+`zigma-flow` 可以通过 script/check step 调用 `zigma-workspace` CLI。Workspace 命令输出的 JSON、diff、patch、snapshot 应被 flow 注册为 artifact。
+
+示例：
+
+```yaml
+steps:
+  - id: prepare-workspace
+    type: script
+    run: zigma-workspace create --repo "$REPO" --base main --branch "$BRANCH" --json > workspace.json
+```
 
 ### 9.2 与 zigma-core
 
-Core 使用 workspace references 关联 task、flow run 和 evidence。Core 可触发 cleanup policy，但不直接操作文件系统。
+Core 可以直接调用 Workspace 创建 workspace，并将 WorkspaceRef 传入 flow inputs。Core 负责将 workspace 关联到 Task 和 Evidence Bundle，但不管理底层 worktree 细节。
 
 ### 9.3 与 zigma-code
 
-Code 提供长期代码托管对象。Workspace 从 Code 或外部 Git remote 准备 checkout，并在任务结束后向 Runner/Core 提供 diff，后续由 Code 记录 PR 或 delivery record。
+平台化阶段，Zigma Code 可读取 workspace diff、branch、commit、snapshot，用于创建 PR、保存 review evidence 或执行 merge policy。
 
-### 9.4 与 zigma-flow
+### 9.4 与 zigma-runner
 
-Flow 在 workspace 内运行，但不拥有 workspace 生命周期。Flow 产生的 `.zigma-flow/runs` 可以作为 workspace 内的运行产物，由 Runner 收集。
+`zigma-runner` 已从当前架构中移除。Workspace 不依赖 Runner，也不为 Runner 设计专用接口。
 
 ## 10. MVP 范围
 
-MVP 聚焦本地 worktree 管理：
+MVP 必须做到：
 
-1. Repository cache。
-2. create workspace。
-3. writable worktree。
-4. read-only checkout。
-5. workspace manifest。
-6. lock / release。
-7. diff collection。
-8. cleanup policy。
-9. local filesystem sandbox provider。
+1. CLI-first。
+2. Repository cache。
+3. `git worktree` workspace 创建。
+4. Workspace manifest。
+5. Workspace registry。
+6. Basic lock。
+7. Diff collection。
+8. Patch artifact 输出。
+9. Cleanup。
+10. JSON output。
 
 MVP 可暂不实现：
 
 1. Docker sandbox。
-2. 远程执行节点。
-3. 高级依赖缓存优化。
+2. Firecracker。
+3. 远程执行节点。
 4. 完整 archive snapshot。
-5. 分布式存储。
-6. 强制文件系统访问控制。
+5. 全语言依赖缓存。
+6. Web UI。
+7. `zigma-code` 深度集成。
 
-## 11. Runner 兼容层关系
+## 11. DataCat 使用场景
 
-`zigma-runner` 自带部分 workspace 功能，是为了在 Zigma 组件未完整安装时仍然能运行完整开发流程。
+### 11.1 Flow script 创建 workspace
 
-兼容层应遵守 Workspace 的数据模型和命名习惯：
+1. `zigma-flow` 启动 DataCat workflow。
+2. 第一个 script step 调用 `zigma-workspace create` 创建 DataCat worktree。
+3. Flow 将 workspace JSON 注册为 artifact 或 context block。
+4. 后续 agent/script/check step 在 workspace path 中执行代码修改、测试、diff。
+5. Flow 调用 `zigma-workspace diff` 收集 patch。
+6. Flow 调用 `gh pr create` 或未来 `zigma-code pr create` 交付 PR。
+7. Core 收集 evidence。
 
-1. 使用同样的 workspace id 格式。
-2. 生成同样的 manifest。
-3. 使用同样的 branch naming policy。
-4. 生成可迁移的 diff summary。
-5. 将来能平滑切换到 `zigma-workspace` 服务。
-
-## 12. DataCat 使用场景
+### 11.2 Core 预创建 workspace
 
 1. Core 创建 DataCat Task。
-2. Runner 或 Workspace 创建基于 DataCat main 分支的 writable workspace。
-3. Workspace 复用 repo cache 和 pnpm cache。
-4. Runner 在 workspace 中执行 `zigma-flow run-all`。
-5. Flow 完成代码修改和测试。
-6. Workspace 收集 diff 和 changed files。
-7. Runner 将 diff 交给 GitHub `gh` 兼容组件或未来 Zigma Code。
-8. Core 记录 workspace 和 evidence。
-9. 成功合并后 Workspace 按策略清理。
+2. Core 调用 Workspace API 创建 workspace。
+3. Core 启动 `zigma-flow` 并传入 workspace path。
+4. Flow 在该 workspace 中执行开发流程。
+5. Flow 或 Core 调用 Workspace 收集 diff 和 snapshot。
 
-## 13. 成功标准
+## 12. 成功标准
 
-1. 可以为一个 Git repository 创建独立 writable worktree。
-2. 可以防止两个 writable runner 同时写入同一 workspace。
-3. 可以收集完整 diff 和 untracked files。
-4. 可以生成 workspace manifest。
-5. 可以复用 repository cache。
-6. 可以按策略清理 workspace。
-7. Runner 可以用兼容层行为迁移到 Workspace API。
+1. `zigma-workspace create` 可以为 DataCat 创建独立 worktree。
+2. CLI 输出可被 `zigma-flow` script step 可靠解析。
+3. `zigma-workspace diff` 可以生成 changed files、status、patch 和 summary。
+4. Workspace manifest 能被 Core 和 Flow 共同引用。
+5. Cleanup 可以清理成功任务并保留失败任务。
+6. 不依赖 `zigma-runner`。
 
-## 14. 风险与应对
+## 13. 风险与应对
 
-### 风险一：工作区泄漏和磁盘膨胀
+### 风险一：flow 中直接调用 CLI 难以标准化
 
-应对：cleanup policy、TTL、max size、workspace event log 和 pinned workspace 机制。
+应对：所有命令支持 `--json`，并保持稳定输出 schema。
 
-### 风险二：缓存污染
+### 风险二：workspace path 泄漏或越界写入
 
-应对：cache profile 隔离项目，关键缓存只读挂载，失败任务可标记 cache suspicious。
+应对：manifest、path policy、denied paths、cleanup 前检查。
 
-### 风险三：路径越权
+### 风险三：worktree 清理失败
 
-应对：MVP 先检测，后续通过 sandbox provider 强制执行。
+应对：记录 registry，提供 orphan worktree 检测和强制 cleanup。
 
-### 风险四：Runner 兼容层和 Workspace 服务分叉
+### 风险四：未来需要服务化
 
-应对：共享 manifest、branch policy、diff summary 和 API contract。
+应对：CLI 与 API 使用同一核心库，未来服务端只是 API 包装。
 
-## 15. 开发阶段建议
+## 14. 开发阶段建议
 
-### P1 Local Workspace Core
+### P1 Workspace CLI Skeleton
 
-实现 workspace model、manifest、root path、repository cache。
+建立 CLI、配置、registry、日志和 JSON 输出协议。
 
-### P2 Worktree and Lock
+### P2 Git Cache and Worktree
 
-实现 git worktree、branch naming、lock/release。
+实现 clone/fetch/cache/worktree/branch/manifest。
 
 ### P3 Diff and Snapshot
 
-实现 status、changed files、patch、snapshot metadata。
+实现 diff、patch、status、snapshot。
 
-### P4 Cleanup and Cache
+### P4 Lock and Path Policy
 
-实现 cleanup policy、cache profile、TTL。
+实现基础 lock、denied paths 和 workspace root escape 检查。
 
-### P5 Runner Migration Contract
+### P5 Cleanup
 
-让 `zigma-runner` 可以通过 Workspace API 替换内置兼容层。
+实现 cleanup policy 和 orphan worktree 检测。
 
-### P6 Sandbox Provider
+### P6 DataCat Dogfood
 
-定义 provider 接口并实现 local provider，预留 Docker/devcontainer。
+在 `zigma-flow` workflow 中调用 `zigma-workspace` 完成真实 DataCat workspace 生命周期。
