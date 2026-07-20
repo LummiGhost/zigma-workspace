@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
 import { openDb } from "../db/index.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
@@ -8,6 +9,9 @@ import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
 import type { Workspace } from "../types/index.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json") as { version: string };
 
 // ── Output helpers ──────────────────────────────────────────────────────────
 
@@ -73,7 +77,7 @@ const program = new Command();
 program
   .name("zigma-workspace")
   .description("Zigma workspace management CLI")
-  .version("0.1.0");
+  .version(version);
 
 // ── create ─────────────────────────────────────────────────────────────────
 
