@@ -52,6 +52,14 @@ CREATE TABLE IF NOT EXISTS workspace_events (
   data TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS workspace_idempotency (
+  operation_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 let _db: Database.Database | null = null;

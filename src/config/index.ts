@@ -13,8 +13,8 @@ function getStateDir(): string {
   return path.join(os.homedir(), STATE_DIR_NAME);
 }
 
-export function getConfig(): ZigmaWorkspaceConfig {
-  const stateDir = getStateDir();
+export function getConfig(stateDirOverride?: string): ZigmaWorkspaceConfig {
+  const stateDir = stateDirOverride ?? getStateDir();
   return {
     stateDir,
     repoCacheDir: path.join(stateDir, "repo-cache"),

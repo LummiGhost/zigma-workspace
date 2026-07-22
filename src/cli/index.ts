@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+import * as crypto from "node:crypto";
 import { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
 import { openDb } from "../db/index.js";
+import { getIdempotencyRecord, insertIdempotencyRecord } from "../db/queries.js";
+import { getRepositoryCacheByUrl } from "../db/queries.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
 import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
+import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import type { Workspace } from "../types/index.js";
+import type Database from "better-sqlite3";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json") as { version: string };
@@ -17,16 +23,24 @@ const { version } = require("../../package.json") as { version: string };
 
 function outputOk(data: unknown, useJson: boolean): void {
   if (useJson) {
-    console.log(JSON.stringify({ ok: true, data }, null, 2));
+    console.log(JSON.stringify({ contract_version: CONTRACT_VERSION, ok: true, data }, null, 2));
   } else {
     console.log(formatHuman(data));
   }
 }
 
-function outputError(message: string, useJson: boolean, details?: unknown): void {
+function outputError(
+  code: string,
+  message: string,
+  useJson: boolean,
+  details?: Record<string, unknown>
+): never {
   if (useJson) {
-    const out: Record<string, unknown> = { ok: false, error: message };
-    if (details !== undefined) out["details"] = details;
+    const out: Record<string, unknown> = {
+      contract_version: CONTRACT_VERSION,
+      ok: false,
+      error: { code, message, ...(details !== undefined ? { details } : {}) },
+    };
     console.error(JSON.stringify(out, null, 2));
   } else {
     console.error(`Error: ${message}`);
@@ -35,6 +49,13 @@ function outputError(message: string, useJson: boolean, details?: unknown): void
     }
   }
   process.exit(1);
+}
+
+function catchError(err: unknown, useJson: boolean): never {
+  const code = err instanceof ZigmaError ? err.code : "INTERNAL_ERROR";
+  const message = err instanceof Error ? err.message : String(err);
+  const details = err instanceof ZigmaError ? err.details : undefined;
+  return outputError(code, message, useJson, details);
 }
 
 function formatHuman(data: unknown): string {
@@ -60,10 +81,64 @@ function formatWorkspace(ws: Workspace): string {
     .join("\n");
 }
 
+// ── Idempotency helpers ─────────────────────────────────────────────────────
+
+function hashInput(input: Record<string, unknown>): string {
+  const sorted = Object.keys(input)
+    .sort()
+    .reduce<Record<string, unknown>>((acc, k) => {
+      acc[k] = input[k];
+      return acc;
+    }, {});
+  return crypto.createHash("sha256").update(JSON.stringify(sorted), "utf-8").digest("hex");
+}
+
+type IdempotencyOutcome =
+  | { type: "miss" }
+  | { type: "hit"; cachedResult: unknown }
+  | { type: "conflict" };
+
+function checkIdempotency(
+  db: Database.Database,
+  operationId: string,
+  command: string,
+  input: Record<string, unknown>
+): IdempotencyOutcome {
+  const existing = getIdempotencyRecord(db, operationId);
+  if (!existing) return { type: "miss" };
+  const inputHash = hashInput(input);
+  if (existing.command !== command || existing.input_hash !== inputHash) {
+    return { type: "conflict" };
+  }
+  return { type: "hit", cachedResult: JSON.parse(existing.result_json) as unknown };
+}
+
+function recordIdempotency(
+  db: Database.Database,
+  operationId: string,
+  command: string,
+  input: Record<string, unknown>,
+  result: unknown
+): void {
+  insertIdempotencyRecord(db, {
+    operation_id: operationId,
+    command,
+    input_hash: hashInput(input),
+    result_json: JSON.stringify(result),
+    created_at: new Date().toISOString(),
+  });
+}
+
+// ── URI helper ───────────────────────────────────────────────────────────────
+
+function toFileUri(absolutePath: string): string {
+  return pathToFileURL(absolutePath).href;
+}
+
 // ── Setup ──────────────────────────────────────────────────────────────────
 
-function setup() {
-  const config = getConfig();
+function setup(stateDirOverride?: string) {
+  const config = getConfig(stateDirOverride);
   ensureStateDirs(config);
   loadConfigFile(config);
   const db = openDb(config);
@@ -77,7 +152,8 @@ const program = new Command();
 program
   .name("zigma-workspace")
   .description("Zigma workspace management CLI")
-  .version(version);
+  .version(version)
+  .option("--state-dir <path>", "Override state directory (or set ZIGMA_WORKSPACE_STATE_DIR)");
 
 // ── create ─────────────────────────────────────────────────────────────────
 
@@ -91,6 +167,7 @@ program
   .option("--project <projectId>", "Project ID to associate")
   .option("--task <taskId>", "Task ID to associate")
   .option("--flow-run <flowRunId>", "Flow run ID to associate")
+  .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
     async (
@@ -102,19 +179,45 @@ program
         project?: string;
         task?: string;
         flowRun?: string;
+        operationId?: string;
         json?: boolean;
       }
     ) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
         if (opts.mode !== "writable" && opts.mode !== "read-only") {
-          outputError(
-            `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`,
-            useJson
-          );
-          return;
+          outputError("INVALID_INPUT", `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`, useJson);
         }
-        const { config, db } = setup();
+
+        const { config, db } = setup(globalOpts.stateDir);
+
+        const idempotencyInput: Record<string, unknown> = {
+          repo: opts.repo,
+          base: opts.base,
+          branch: opts.branch,
+          mode: opts.mode,
+          project: opts.project ?? null,
+          task: opts.task ?? null,
+          flowRun: opts.flowRun ?? null,
+        };
+
+        if (opts.operationId) {
+          const outcome = checkIdempotency(db, opts.operationId, "create", idempotencyInput);
+          if (outcome.type === "hit") {
+            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            return;
+          }
+          if (outcome.type === "conflict") {
+            outputError(
+              "OPERATION_ID_CONFLICT",
+              `Operation ID "${opts.operationId}" was already used with different inputs`,
+              useJson,
+              { operationId: opts.operationId }
+            );
+          }
+        }
+
         const workspace = createWorkspace(db, config, {
           repositoryUrl: opts.repo,
           baseRef: opts.base,
@@ -125,31 +228,31 @@ program
           flowRunId: opts.flowRun,
         });
 
+        const data = {
+          workspace_id: workspace.id,
+          path: workspace.path,
+          branch: workspace.branch,
+          base_ref: workspace.baseRef,
+          base_commit: workspace.baseCommit,
+          mode: workspace.mode,
+          status: workspace.status,
+          manifest_path: `${workspace.path}/.zigma-workspace.json`,
+          created_at: workspace.createdAt,
+        };
+
         if (useJson) {
-          outputOk(
-            {
-              workspace_id: workspace.id,
-              path: workspace.path,
-              branch: workspace.branch,
-              base_ref: workspace.baseRef,
-              base_commit: workspace.baseCommit,
-              mode: workspace.mode,
-              status: workspace.status,
-              manifest_path: `${workspace.path}/.zigma-workspace.json`,
-              created_at: workspace.createdAt,
-            },
-            true
-          );
+          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
+          if (opts.operationId) {
+            recordIdempotency(db, opts.operationId, "create", idempotencyInput, response);
+          }
+          console.log(JSON.stringify(response, null, 2));
         } else {
           console.log("Workspace created successfully\n");
           console.log(formatWorkspace(workspace));
           console.log(`\nManifest: ${workspace.path}/.zigma-workspace.json`);
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -162,6 +265,7 @@ program
   .requiredOption("--workspace <id>", "Workspace ID")
   .option("--task <taskId>", "Task ID")
   .option("--flow-run <flowRunId>", "Flow run ID")
+  .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
     async (
@@ -169,38 +273,63 @@ program
         workspace: string;
         task?: string;
         flowRun?: string;
+        operationId?: string;
         json?: boolean;
       }
     ) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { db } = setup();
+        const { db } = setup(globalOpts.stateDir);
+
+        const idempotencyInput: Record<string, unknown> = {
+          workspace: opts.workspace,
+          task: opts.task ?? null,
+          flowRun: opts.flowRun ?? null,
+        };
+
+        if (opts.operationId) {
+          const outcome = checkIdempotency(db, opts.operationId, "bind-run", idempotencyInput);
+          if (outcome.type === "hit") {
+            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            return;
+          }
+          if (outcome.type === "conflict") {
+            outputError(
+              "OPERATION_ID_CONFLICT",
+              `Operation ID "${opts.operationId}" was already used with different inputs`,
+              useJson,
+              { operationId: opts.operationId }
+            );
+          }
+        }
+
         const workspace = bindRun(db, {
           workspaceId: opts.workspace,
           taskId: opts.task,
           flowRunId: opts.flowRun,
         });
 
+        const data = {
+          workspace_id: workspace.id,
+          task_id: workspace.taskId ?? null,
+          flow_run_id: workspace.flowRunId ?? null,
+          status: workspace.status,
+          updated_at: workspace.updatedAt,
+        };
+
         if (useJson) {
-          outputOk(
-            {
-              workspace_id: workspace.id,
-              task_id: workspace.taskId ?? null,
-              flow_run_id: workspace.flowRunId ?? null,
-              status: workspace.status,
-              updated_at: workspace.updatedAt,
-            },
-            true
-          );
+          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
+          if (opts.operationId) {
+            recordIdempotency(db, opts.operationId, "bind-run", idempotencyInput, response);
+          }
+          console.log(JSON.stringify(response, null, 2));
         } else {
           console.log("Workspace bound to run\n");
           console.log(formatWorkspace(workspace));
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -215,10 +344,12 @@ program
   .action(
     async (opts: { workspace: string; json?: boolean }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { db } = setup();
+        const { db } = setup(globalOpts.stateDir);
         const workspace = getWorkspace(db, opts.workspace);
         const lock = getLock(db, opts.workspace);
+        const cacheRow = getRepositoryCacheByUrl(db, workspace.repositoryUrl);
 
         if (useJson) {
           outputOk(
@@ -231,6 +362,7 @@ program
               path: workspace.path,
               mode: workspace.mode,
               repository_url: workspace.repositoryUrl,
+              repository_cache_id: cacheRow?.id ?? null,
               task_id: workspace.taskId ?? null,
               flow_run_id: workspace.flowRunId ?? null,
               project_id: workspace.projectId ?? null,
@@ -257,10 +389,7 @@ program
           }
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -276,11 +405,21 @@ program
   .action(
     async (opts: { workspace: string; patchOut?: string; json?: boolean }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { config, db } = setup();
+        const { config, db } = setup(globalOpts.stateDir);
         const diff = collectDiff(db, config, opts.workspace, opts.patchOut);
 
         if (useJson) {
+          const patchArtifact =
+            diff.patchPath
+              ? {
+                  uri: toFileUri(diff.patchPath),
+                  media_type: "text/x-diff",
+                  digest: diff.patchDigest ? `sha256:${diff.patchDigest}` : null,
+                }
+              : null;
+
           outputOk(
             {
               workspace_id: diff.workspaceId,
@@ -290,6 +429,7 @@ program
               untracked_files: diff.untrackedFiles,
               status_text: diff.statusText,
               patch_path: diff.patchPath ?? null,
+              patch_artifact: patchArtifact,
               summary: diff.summary,
             },
             true
@@ -310,10 +450,7 @@ program
           }
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -324,26 +461,59 @@ program
   .command("snapshot")
   .description("Create a snapshot of the workspace state")
   .requiredOption("--workspace <id>", "Workspace ID")
+  .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
-    async (opts: { workspace: string; json?: boolean }) => {
+    async (opts: { workspace: string; operationId?: string; json?: boolean }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { config, db } = setup();
+        const { config, db } = setup(globalOpts.stateDir);
+
+        const idempotencyInput: Record<string, unknown> = { workspace: opts.workspace };
+
+        if (opts.operationId) {
+          const outcome = checkIdempotency(db, opts.operationId, "snapshot", idempotencyInput);
+          if (outcome.type === "hit") {
+            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            return;
+          }
+          if (outcome.type === "conflict") {
+            outputError(
+              "OPERATION_ID_CONFLICT",
+              `Operation ID "${opts.operationId}" was already used with different inputs`,
+              useJson,
+              { operationId: opts.operationId }
+            );
+          }
+        }
+
         const snapshot = createSnapshot(db, config, opts.workspace);
 
+        const artifact = snapshot.path
+          ? {
+              uri: toFileUri(snapshot.path),
+              media_type: snapshot.kind === "diff" ? "text/x-diff" : "application/json",
+              digest: snapshot.checksum ? `sha256:${snapshot.checksum}` : null,
+            }
+          : null;
+
+        const data = {
+          snapshot_id: snapshot.id,
+          workspace_id: snapshot.workspaceId,
+          kind: snapshot.kind,
+          path: snapshot.path ?? null,
+          checksum: snapshot.checksum ?? null,
+          artifact,
+          created_at: snapshot.createdAt,
+        };
+
         if (useJson) {
-          outputOk(
-            {
-              snapshot_id: snapshot.id,
-              workspace_id: snapshot.workspaceId,
-              kind: snapshot.kind,
-              path: snapshot.path ?? null,
-              checksum: snapshot.checksum ?? null,
-              created_at: snapshot.createdAt,
-            },
-            true
-          );
+          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
+          if (opts.operationId) {
+            recordIdempotency(db, opts.operationId, "snapshot", idempotencyInput, response);
+          }
+          console.log(JSON.stringify(response, null, 2));
         } else {
           console.log(`Snapshot created: ${snapshot.id}`);
           console.log(`Kind:     ${snapshot.kind}`);
@@ -352,10 +522,7 @@ program
           console.log(`Created:  ${snapshot.createdAt}`);
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -366,24 +533,48 @@ program
   .command("cleanup")
   .description("Clean up a workspace (remove worktree and mark as cleaned)")
   .requiredOption("--workspace <id>", "Workspace ID")
+  .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
-    async (opts: { workspace: string; json?: boolean }) => {
+    async (opts: { workspace: string; operationId?: string; json?: boolean }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { config, db } = setup();
+        const { config, db } = setup(globalOpts.stateDir);
+
+        const idempotencyInput: Record<string, unknown> = { workspace: opts.workspace };
+
+        if (opts.operationId) {
+          const outcome = checkIdempotency(db, opts.operationId, "cleanup", idempotencyInput);
+          if (outcome.type === "hit") {
+            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            return;
+          }
+          if (outcome.type === "conflict") {
+            outputError(
+              "OPERATION_ID_CONFLICT",
+              `Operation ID "${opts.operationId}" was already used with different inputs`,
+              useJson,
+              { operationId: opts.operationId }
+            );
+          }
+        }
+
         const result = cleanupWorkspace(db, config, opts.workspace);
 
+        const data = {
+          workspace_id: result.workspaceId,
+          path: result.path,
+          removed: result.removed,
+          message: result.message,
+        };
+
         if (useJson) {
-          outputOk(
-            {
-              workspace_id: result.workspaceId,
-              path: result.path,
-              removed: result.removed,
-              message: result.message,
-            },
-            true
-          );
+          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
+          if (opts.operationId) {
+            recordIdempotency(db, opts.operationId, "cleanup", idempotencyInput, response);
+          }
+          console.log(JSON.stringify(response, null, 2));
         } else {
           console.log(`Workspace ${result.workspaceId} cleaned`);
           console.log(`Path:    ${result.path}`);
@@ -391,10 +582,7 @@ program
           console.log(`Message: ${result.message}`);
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -407,8 +595,9 @@ program
   .option("--json", "Output JSON")
   .action(async (opts: { json?: boolean }) => {
     const useJson = opts.json ?? false;
+    const globalOpts = program.opts<{ stateDir?: string }>();
     try {
-      const { db } = setup();
+      const { db } = setup(globalOpts.stateDir);
       const workspaces = listAllWorkspaces(db);
 
       if (useJson) {
@@ -442,10 +631,7 @@ program
         }
       }
     } catch (err) {
-      outputError(
-        err instanceof Error ? err.message : String(err),
-        useJson
-      );
+      catchError(err, useJson);
     }
   });
 
@@ -468,15 +654,12 @@ program
       json?: boolean;
     }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
         if (opts.mode !== "read" && opts.mode !== "write") {
-          outputError(
-            `Invalid lock mode "${opts.mode}". Must be "read" or "write"`,
-            useJson
-          );
-          return;
+          outputError("INVALID_INPUT", `Invalid lock mode "${opts.mode}". Must be "read" or "write"`, useJson);
         }
-        const { db } = setup();
+        const { db } = setup(globalOpts.stateDir);
         const lock = lockWorkspace(
           db,
           opts.workspace,
@@ -506,10 +689,7 @@ program
           if (lock.expiresAt) console.log(`Expires:   ${lock.expiresAt}`);
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );
@@ -524,8 +704,9 @@ program
   .action(
     async (opts: { workspace: string; json?: boolean }) => {
       const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
       try {
-        const { db } = setup();
+        const { db } = setup(globalOpts.stateDir);
         unlockWorkspace(db, opts.workspace);
 
         if (useJson) {
@@ -534,10 +715,7 @@ program
           console.log(`Workspace ${opts.workspace} unlocked`);
         }
       } catch (err) {
-        outputError(
-          err instanceof Error ? err.message : String(err),
-          useJson
-        );
+        catchError(err, useJson);
       }
     }
   );

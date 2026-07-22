@@ -47,6 +47,7 @@ export interface WorkspaceDiff {
   untrackedFiles: string[];
   statusText: string;
   patchPath?: string;
+  patchDigest?: string;
   summary: string;
 }
 
@@ -149,3 +150,46 @@ export interface WorkspaceEventRow {
   data: string | null;
   created_at: string;
 }
+
+// ── Contract types ───────────────────────────────────────────────────────────
+
+export const CONTRACT_VERSION = 1 as const;
+
+export type ZigmaErrorCode =
+  | "WORKSPACE_NOT_FOUND"
+  | "WORKSPACE_LOCK_CONFLICT"
+  | "WORKSPACE_DIRECTORY_NOT_FOUND"
+  | "GIT_ERROR"
+  | "INVALID_INPUT"
+  | "OPERATION_ID_CONFLICT"
+  | "INTERNAL_ERROR";
+
+export class ZigmaError extends Error {
+  readonly code: ZigmaErrorCode;
+  readonly details?: Record<string, unknown>;
+
+  constructor(code: ZigmaErrorCode, message: string, details?: Record<string, unknown>) {
+    super(message);
+    this.name = "ZigmaError";
+    this.code = code;
+    this.details = details;
+  }
+}
+
+export interface JsonOkResponse<T = unknown> {
+  contract_version: typeof CONTRACT_VERSION;
+  ok: true;
+  data: T;
+}
+
+export interface JsonErrorResponse {
+  contract_version: typeof CONTRACT_VERSION;
+  ok: false;
+  error: {
+    code: ZigmaErrorCode | string;
+    message: string;
+    details?: Record<string, unknown>;
+  };
+}
+
+export type JsonResponse<T = unknown> = JsonOkResponse<T> | JsonErrorResponse;

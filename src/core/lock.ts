@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceLock } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceLock,
@@ -38,15 +39,16 @@ export function lockWorkspace(
 ): WorkspaceLock {
   const wsRow = getWorkspaceById(db, workspaceId);
   if (!wsRow) {
-    throw new Error(`Workspace ${workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
   // Check for existing lock
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
   if (existingLock) {
-    throw new Error(
-      `Workspace ${workspaceId} is already locked by ${existingLock.owner} ` +
-        `(mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
+      { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
     );
   }
 
@@ -81,7 +83,7 @@ export function unlockWorkspace(
 ): void {
   const wsRow = getWorkspaceById(db, workspaceId);
   if (!wsRow) {
-    throw new Error(`Workspace ${workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
