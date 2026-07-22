@@ -186,7 +186,7 @@ export interface JsonErrorResponse {
   contract_version: typeof CONTRACT_VERSION;
   ok: false;
   error: {
-    code: ZigmaErrorCode | string;
+    code: ZigmaErrorCode;
     message: string;
     details?: Record<string, unknown>;
   };

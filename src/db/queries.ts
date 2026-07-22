@@ -179,6 +179,16 @@ export function insertIdempotencyRecord(
   `).run(row);
 }
 
+export function updateIdempotencyResult(
+  db: Database.Database,
+  operationId: string,
+  resultJson: string
+): void {
+  db.prepare(
+    "UPDATE workspace_idempotency SET result_json = ? WHERE operation_id = ?"
+  ).run(resultJson, operationId);
+}
+
 // ── Workspace Events ────────────────────────────────────────────────────────
 
 export function insertWorkspaceEvent(

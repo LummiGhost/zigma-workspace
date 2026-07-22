@@ -1,15 +1,18 @@
 # TypeScript API 参考
 
-项目当前没有在 `package.json` 中声明根级 `exports`，也没有 `src/index.ts` 聚合入口。因此以下模块 API 是源码/构建产物级接口，而不是已承诺稳定的 npm 包公共入口。
-
-源码使用 ESM 和 NodeNext 模块解析。仓库内 TypeScript 导入示例：
+`package.json` 的 `exports` 字段将包的公共入口指向 `dist/api/index.js`（对应源码 `src/api/index.ts`），外部消费者应从这里导入，而不是直接引用内部模块路径。
 
 ```ts
-import { getConfig, ensureStateDirs } from "../src/config/index.js";
-import { openDb, closeDb } from "../src/db/index.js";
-import { createWorkspace } from "../src/core/workspace.js";
+import {
+  CONTRACT_VERSION,
+  ZigmaError,
+  getConfig,
+  ensureStateDirs,
+  openDb,
+  createWorkspace,
+} from "zigma-workspace";
 
-const config = getConfig();
+const config = getConfig();          // 使用 ZIGMA_WORKSPACE_STATE_DIR 或 ~/.zigma-workspace
 ensureStateDirs(config);
 const db = openDb(config);
 
@@ -21,20 +24,65 @@ try {
     mode: "writable",
   });
   console.log(workspace.id, workspace.path);
-} finally {
-  closeDb();
+} catch (err) {
+  if (err instanceof ZigmaError) {
+    console.error(err.code, err.message, err.details);
+  }
 }
 ```
 
-构建后，外部代码可使用相应的 `dist/...` 模块路径，但这些路径目前没有语义版本兼容保证。
+## 库公共 API（`src/api/index.ts`）
+
+以下类型和函数通过 `src/api/index.ts` 统一导出：
+
+### 合约常量和类型
+
+```ts
+const CONTRACT_VERSION: 1;
+
+type ZigmaErrorCode =
+  | "WORKSPACE_NOT_FOUND"
+  | "WORKSPACE_LOCK_CONFLICT"
+  | "WORKSPACE_DIRECTORY_NOT_FOUND"
+  | "GIT_ERROR"
+  | "INVALID_INPUT"
+  | "OPERATION_ID_CONFLICT"
+  | "INTERNAL_ERROR";
+
+class ZigmaError extends Error {
+  readonly code: ZigmaErrorCode;
+  readonly details?: Record<string, unknown>;
+}
+
+interface JsonOkResponse<T = unknown> {
+  contract_version: 1;
+  ok: true;
+  data: T;
+}
+
+interface JsonErrorResponse {
+  contract_version: 1;
+  ok: false;
+  error: { code: ZigmaErrorCode; message: string; details?: Record<string, unknown> };
+}
+
+type JsonResponse<T = unknown> = JsonOkResponse<T> | JsonErrorResponse;
+```
+
+### 路径语义
+
+- 所有路径均为绝对路径，由 `path.join()` 生成；在 Windows 上使用本地分隔符，在 POSIX 上使用 `/`。
+- `getConfig(stateDirOverride?)` 接受可选的绝对路径覆盖；传入相对路径时抛出 `INVALID_INPUT`。
+- artifact URI（`patch_artifact.uri`、`artifact.uri`）由 Node.js 内置 `pathToFileURL()` 生成，格式为 `file:///`，Windows 驱动器字母和反斜杠均正确处理。
+- UTF-8 路径由底层 `fs` 和 Git 透传；UNC 路径（`\\server\share`）未经测试。
 
 ## 配置 API
 
 模块：`src/config/index.ts`
 
-### `getConfig(): ZigmaWorkspaceConfig`
+### `getConfig(stateDirOverride?: string): ZigmaWorkspaceConfig`
 
-根据 `ZIGMA_WORKSPACE_STATE_DIR`（若设置）或 `~/.zigma-workspace` 生成路径配置：
+根据 `stateDirOverride`、`ZIGMA_WORKSPACE_STATE_DIR`（若设置）或 `~/.zigma-workspace` 生成路径配置（优先级从高到低）。传入非绝对路径时抛出 `ZigmaError("INVALID_INPUT", ...)`。
 
 ```ts
 interface ZigmaWorkspaceConfig {
@@ -74,11 +122,11 @@ interface ZigmaWorkspaceConfig {
 
 ### `openDb(config): Database.Database`
 
-打开 `config.dbPath`，启用 WAL 和 foreign keys，并按需创建表。进程内使用单例连接：第一次调用之后，再传入不同 config 仍返回原连接，除非先调用 `closeDb()`。
+打开 `config.dbPath`，启用 WAL 和 foreign keys，并按需创建表。进程内以 `dbPath` 为键缓存连接：同一路径的多次调用返回相同连接；不同路径（如使用 `--state-dir`）各自维护独立连接。
 
-### `closeDb(): void`
+### `closeDb(config?: ZigmaWorkspaceConfig): void`
 
-关闭并清除进程内数据库单例。可重复调用。
+传入 `config` 时关闭并移除对应路径的缓存连接；不传时关闭并清除所有缓存连接。
 
 `src/db/queries.ts` 还导出 workspace、repository cache、lock、snapshot 和 event 的低层 CRUD 函数。这些函数直接接收/返回数据库 row 类型，不做业务校验，通常应优先使用 core API。
 
@@ -166,6 +214,7 @@ interface WorkspaceDiff {
   untrackedFiles: string[];
   statusText: string;
   patchPath?: string;
+  patchDigest?: string;  // SHA-256 hex of patch content; present when patchPath is set
   summary: string;
 }
 ```

@@ -29,9 +29,13 @@ zigma-workspace create `
   --json
 ```
 
-默认状态目录是用户主目录下的 `.zigma-workspace`。如需隔离测试或 CI 状态，请设置：
+默认状态目录是用户主目录下的 `.zigma-workspace`。如需隔离测试或 CI 状态，可通过全局选项或环境变量指定绝对路径：
 
 ```powershell
+# 全局选项（优先级更高）
+zigma-workspace --state-dir D:\temp\zigma-state create ...
+
+# 环境变量
 $env:ZIGMA_WORKSPACE_STATE_DIR = "D:\temp\zigma-state"
 ```
 

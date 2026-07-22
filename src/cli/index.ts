@@ -5,15 +5,20 @@ import { pathToFileURL } from "node:url";
 import * as crypto from "node:crypto";
 import { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
 import { openDb } from "../db/index.js";
-import { getIdempotencyRecord, insertIdempotencyRecord } from "../db/queries.js";
-import { getRepositoryCacheByUrl } from "../db/queries.js";
+import {
+  getIdempotencyRecord,
+  insertIdempotencyRecord,
+  updateIdempotencyResult,
+  getRepositoryCacheByUrl,
+} from "../db/queries.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
 import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
-import type { Workspace } from "../types/index.js";
+import { GitError } from "../git/index.js";
+import type { Workspace, ZigmaErrorCode } from "../types/index.js";
 import type Database from "better-sqlite3";
 
 const require = createRequire(import.meta.url);
@@ -30,13 +35,13 @@ function outputOk(data: unknown, useJson: boolean): void {
 }
 
 function outputError(
-  code: string,
+  code: ZigmaErrorCode,
   message: string,
   useJson: boolean,
   details?: Record<string, unknown>
 ): never {
   if (useJson) {
-    const out: Record<string, unknown> = {
+    const out = {
       contract_version: CONTRACT_VERSION,
       ok: false,
       error: { code, message, ...(details !== undefined ? { details } : {}) },
@@ -52,10 +57,14 @@ function outputError(
 }
 
 function catchError(err: unknown, useJson: boolean): never {
-  const code = err instanceof ZigmaError ? err.code : "INTERNAL_ERROR";
+  if (err instanceof ZigmaError) {
+    return outputError(err.code, err.message, useJson, err.details);
+  }
+  if (err instanceof GitError) {
+    return outputError("GIT_ERROR", err.message, useJson, { command: err.command, stderr: err.stderr });
+  }
   const message = err instanceof Error ? err.message : String(err);
-  const details = err instanceof ZigmaError ? err.details : undefined;
-  return outputError(code, message, useJson, details);
+  return outputError("INTERNAL_ERROR", message, useJson);
 }
 
 function formatHuman(data: unknown): string {
@@ -83,50 +92,69 @@ function formatWorkspace(ws: Workspace): string {
 
 // ── Idempotency helpers ─────────────────────────────────────────────────────
 
+function sortedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedKeys);
+  if (value !== null && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, k) => {
+        acc[k] = sortedKeys((value as Record<string, unknown>)[k]);
+        return acc;
+      }, {});
+  }
+  return value;
+}
+
 function hashInput(input: Record<string, unknown>): string {
-  const sorted = Object.keys(input)
-    .sort()
-    .reduce<Record<string, unknown>>((acc, k) => {
-      acc[k] = input[k];
-      return acc;
-    }, {});
-  return crypto.createHash("sha256").update(JSON.stringify(sorted), "utf-8").digest("hex");
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(sortedKeys(input)), "utf-8")
+    .digest("hex");
 }
 
 type IdempotencyOutcome =
-  | { type: "miss" }
   | { type: "hit"; cachedResult: unknown }
-  | { type: "conflict" };
+  | { type: "conflict" }
+  | { type: "reserved" };
 
-function checkIdempotency(
+/**
+ * Atomically check for an existing operation record and reserve a slot if absent.
+ * Uses a SQLite transaction to prevent TOCTOU races between concurrent processes.
+ */
+function reserveOrCheckIdempotency(
   db: Database.Database,
   operationId: string,
   command: string,
   input: Record<string, unknown>
 ): IdempotencyOutcome {
-  const existing = getIdempotencyRecord(db, operationId);
-  if (!existing) return { type: "miss" };
   const inputHash = hashInput(input);
-  if (existing.command !== command || existing.input_hash !== inputHash) {
-    return { type: "conflict" };
-  }
-  return { type: "hit", cachedResult: JSON.parse(existing.result_json) as unknown };
+  return (db.transaction(() => {
+    const existing = getIdempotencyRecord(db, operationId);
+    if (existing) {
+      if (existing.command !== command || existing.input_hash !== inputHash) {
+        return { type: "conflict" as const };
+      }
+      const result = JSON.parse(existing.result_json) as unknown;
+      return { type: "hit" as const, cachedResult: result };
+    }
+    // Reserve the slot with a sentinel so concurrent processes see "already claimed"
+    insertIdempotencyRecord(db, {
+      operation_id: operationId,
+      command,
+      input_hash: inputHash,
+      result_json: JSON.stringify({ __pending: true }),
+      created_at: new Date().toISOString(),
+    });
+    return { type: "reserved" as const };
+  }) as () => IdempotencyOutcome)();
 }
 
-function recordIdempotency(
+function commitIdempotency(
   db: Database.Database,
   operationId: string,
-  command: string,
-  input: Record<string, unknown>,
   result: unknown
 ): void {
-  insertIdempotencyRecord(db, {
-    operation_id: operationId,
-    command,
-    input_hash: hashInput(input),
-    result_json: JSON.stringify(result),
-    created_at: new Date().toISOString(),
-  });
+  updateIdempotencyResult(db, operationId, JSON.stringify(result));
 }
 
 // ── URI helper ───────────────────────────────────────────────────────────────
@@ -153,7 +181,10 @@ program
   .name("zigma-workspace")
   .description("Zigma workspace management CLI")
   .version(version)
-  .option("--state-dir <path>", "Override state directory (or set ZIGMA_WORKSPACE_STATE_DIR)");
+  .option(
+    "--state-dir <path>",
+    "Override state directory with an absolute path (or set ZIGMA_WORKSPACE_STATE_DIR)"
+  );
 
 // ── create ─────────────────────────────────────────────────────────────────
 
@@ -170,24 +201,26 @@ program
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
-    async (
-      opts: {
-        repo: string;
-        base: string;
-        branch: string;
-        mode: string;
-        project?: string;
-        task?: string;
-        flowRun?: string;
-        operationId?: string;
-        json?: boolean;
-      }
-    ) => {
+    async (opts: {
+      repo: string;
+      base: string;
+      branch: string;
+      mode: string;
+      project?: string;
+      task?: string;
+      flowRun?: string;
+      operationId?: string;
+      json?: boolean;
+    }) => {
       const useJson = opts.json ?? false;
       const globalOpts = program.opts<{ stateDir?: string }>();
       try {
         if (opts.mode !== "writable" && opts.mode !== "read-only") {
-          outputError("INVALID_INPUT", `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`, useJson);
+          outputError(
+            "INVALID_INPUT",
+            `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`,
+            useJson
+          );
         }
 
         const { config, db } = setup(globalOpts.stateDir);
@@ -203,9 +236,13 @@ program
         };
 
         if (opts.operationId) {
-          const outcome = checkIdempotency(db, opts.operationId, "create", idempotencyInput);
+          const outcome = reserveOrCheckIdempotency(db, opts.operationId, "create", idempotencyInput);
           if (outcome.type === "hit") {
-            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            if (useJson) {
+              console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            } else {
+              console.log(`Using cached result for operation ID "${opts.operationId}" (already executed).`);
+            }
             return;
           }
           if (outcome.type === "conflict") {
@@ -240,12 +277,12 @@ program
           created_at: workspace.createdAt,
         };
 
+        if (opts.operationId) {
+          commitIdempotency(db, opts.operationId, { contract_version: CONTRACT_VERSION, ok: true, data });
+        }
+
         if (useJson) {
-          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
-          if (opts.operationId) {
-            recordIdempotency(db, opts.operationId, "create", idempotencyInput, response);
-          }
-          console.log(JSON.stringify(response, null, 2));
+          outputOk(data, true);
         } else {
           console.log("Workspace created successfully\n");
           console.log(formatWorkspace(workspace));
@@ -268,15 +305,13 @@ program
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
-    async (
-      opts: {
-        workspace: string;
-        task?: string;
-        flowRun?: string;
-        operationId?: string;
-        json?: boolean;
-      }
-    ) => {
+    async (opts: {
+      workspace: string;
+      task?: string;
+      flowRun?: string;
+      operationId?: string;
+      json?: boolean;
+    }) => {
       const useJson = opts.json ?? false;
       const globalOpts = program.opts<{ stateDir?: string }>();
       try {
@@ -289,9 +324,13 @@ program
         };
 
         if (opts.operationId) {
-          const outcome = checkIdempotency(db, opts.operationId, "bind-run", idempotencyInput);
+          const outcome = reserveOrCheckIdempotency(db, opts.operationId, "bind-run", idempotencyInput);
           if (outcome.type === "hit") {
-            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            if (useJson) {
+              console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            } else {
+              console.log(`Using cached result for operation ID "${opts.operationId}" (already executed).`);
+            }
             return;
           }
           if (outcome.type === "conflict") {
@@ -318,12 +357,12 @@ program
           updated_at: workspace.updatedAt,
         };
 
+        if (opts.operationId) {
+          commitIdempotency(db, opts.operationId, { contract_version: CONTRACT_VERSION, ok: true, data });
+        }
+
         if (useJson) {
-          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
-          if (opts.operationId) {
-            recordIdempotency(db, opts.operationId, "bind-run", idempotencyInput, response);
-          }
-          console.log(JSON.stringify(response, null, 2));
+          outputOk(data, true);
         } else {
           console.log("Workspace bound to run\n");
           console.log(formatWorkspace(workspace));
@@ -341,58 +380,56 @@ program
   .description("Show workspace status")
   .requiredOption("--workspace <id>", "Workspace ID")
   .option("--json", "Output JSON")
-  .action(
-    async (opts: { workspace: string; json?: boolean }) => {
-      const useJson = opts.json ?? false;
-      const globalOpts = program.opts<{ stateDir?: string }>();
-      try {
-        const { db } = setup(globalOpts.stateDir);
-        const workspace = getWorkspace(db, opts.workspace);
-        const lock = getLock(db, opts.workspace);
-        const cacheRow = getRepositoryCacheByUrl(db, workspace.repositoryUrl);
+  .action(async (opts: { workspace: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    const globalOpts = program.opts<{ stateDir?: string }>();
+    try {
+      const { db } = setup(globalOpts.stateDir);
+      const workspace = getWorkspace(db, opts.workspace);
+      const lock = getLock(db, opts.workspace);
+      const cacheRow = getRepositoryCacheByUrl(db, workspace.repositoryUrl);
 
-        if (useJson) {
-          outputOk(
-            {
-              workspace_id: workspace.id,
-              status: workspace.status,
-              branch: workspace.branch,
-              base_ref: workspace.baseRef,
-              base_commit: workspace.baseCommit,
-              path: workspace.path,
-              mode: workspace.mode,
-              repository_url: workspace.repositoryUrl,
-              repository_cache_id: cacheRow?.id ?? null,
-              task_id: workspace.taskId ?? null,
-              flow_run_id: workspace.flowRunId ?? null,
-              project_id: workspace.projectId ?? null,
-              created_at: workspace.createdAt,
-              updated_at: workspace.updatedAt,
-              lock: lock
-                ? {
-                    id: lock.id,
-                    mode: lock.mode,
-                    owner: lock.owner,
-                    acquired_at: lock.acquiredAt,
-                    expires_at: lock.expiresAt ?? null,
-                  }
-                : null,
-            },
-            true
+      if (useJson) {
+        outputOk(
+          {
+            workspace_id: workspace.id,
+            status: workspace.status,
+            branch: workspace.branch,
+            base_ref: workspace.baseRef,
+            base_commit: workspace.baseCommit,
+            path: workspace.path,
+            mode: workspace.mode,
+            repository_url: workspace.repositoryUrl,
+            repository_cache_id: cacheRow?.id ?? null,
+            task_id: workspace.taskId ?? null,
+            flow_run_id: workspace.flowRunId ?? null,
+            project_id: workspace.projectId ?? null,
+            created_at: workspace.createdAt,
+            updated_at: workspace.updatedAt,
+            lock: lock
+              ? {
+                  id: lock.id,
+                  mode: lock.mode,
+                  owner: lock.owner,
+                  acquired_at: lock.acquiredAt,
+                  expires_at: lock.expiresAt ?? null,
+                }
+              : null,
+          },
+          true
+        );
+      } else {
+        console.log(formatWorkspace(workspace));
+        if (lock) {
+          console.log(
+            `\nLocked by: ${lock.owner} (mode: ${lock.mode}, acquired: ${lock.acquiredAt})`
           );
-        } else {
-          console.log(formatWorkspace(workspace));
-          if (lock) {
-            console.log(
-              `\nLocked by: ${lock.owner} (mode: ${lock.mode}, acquired: ${lock.acquiredAt})`
-            );
-          }
         }
-      } catch (err) {
-        catchError(err, useJson);
       }
+    } catch (err) {
+      catchError(err, useJson);
     }
-  );
+  });
 
 // ── diff ────────────────────────────────────────────────────────────────────
 
@@ -412,11 +449,11 @@ program
 
         if (useJson) {
           const patchArtifact =
-            diff.patchPath
+            diff.patchPath && diff.patchDigest
               ? {
                   uri: toFileUri(diff.patchPath),
                   media_type: "text/x-diff",
-                  digest: diff.patchDigest ? `sha256:${diff.patchDigest}` : null,
+                  digest: `sha256:${diff.patchDigest}`,
                 }
               : null;
 
@@ -473,9 +510,13 @@ program
         const idempotencyInput: Record<string, unknown> = { workspace: opts.workspace };
 
         if (opts.operationId) {
-          const outcome = checkIdempotency(db, opts.operationId, "snapshot", idempotencyInput);
+          const outcome = reserveOrCheckIdempotency(db, opts.operationId, "snapshot", idempotencyInput);
           if (outcome.type === "hit") {
-            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            if (useJson) {
+              console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            } else {
+              console.log(`Using cached result for operation ID "${opts.operationId}" (already executed).`);
+            }
             return;
           }
           if (outcome.type === "conflict") {
@@ -490,13 +531,14 @@ program
 
         const snapshot = createSnapshot(db, config, opts.workspace);
 
-        const artifact = snapshot.path
-          ? {
-              uri: toFileUri(snapshot.path),
-              media_type: snapshot.kind === "diff" ? "text/x-diff" : "application/json",
-              digest: snapshot.checksum ? `sha256:${snapshot.checksum}` : null,
-            }
-          : null;
+        const artifact =
+          snapshot.path && snapshot.checksum
+            ? {
+                uri: toFileUri(snapshot.path),
+                media_type: snapshot.kind === "diff" ? "text/x-diff" : "application/json",
+                digest: `sha256:${snapshot.checksum}`,
+              }
+            : null;
 
         const data = {
           snapshot_id: snapshot.id,
@@ -508,12 +550,12 @@ program
           created_at: snapshot.createdAt,
         };
 
+        if (opts.operationId) {
+          commitIdempotency(db, opts.operationId, { contract_version: CONTRACT_VERSION, ok: true, data });
+        }
+
         if (useJson) {
-          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
-          if (opts.operationId) {
-            recordIdempotency(db, opts.operationId, "snapshot", idempotencyInput, response);
-          }
-          console.log(JSON.stringify(response, null, 2));
+          outputOk(data, true);
         } else {
           console.log(`Snapshot created: ${snapshot.id}`);
           console.log(`Kind:     ${snapshot.kind}`);
@@ -545,9 +587,13 @@ program
         const idempotencyInput: Record<string, unknown> = { workspace: opts.workspace };
 
         if (opts.operationId) {
-          const outcome = checkIdempotency(db, opts.operationId, "cleanup", idempotencyInput);
+          const outcome = reserveOrCheckIdempotency(db, opts.operationId, "cleanup", idempotencyInput);
           if (outcome.type === "hit") {
-            if (useJson) console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            if (useJson) {
+              console.log(JSON.stringify(outcome.cachedResult, null, 2));
+            } else {
+              console.log(`Using cached result for operation ID "${opts.operationId}" (already executed).`);
+            }
             return;
           }
           if (outcome.type === "conflict") {
@@ -569,12 +615,12 @@ program
           message: result.message,
         };
 
+        if (opts.operationId) {
+          commitIdempotency(db, opts.operationId, { contract_version: CONTRACT_VERSION, ok: true, data });
+        }
+
         if (useJson) {
-          const response = { contract_version: CONTRACT_VERSION, ok: true as const, data };
-          if (opts.operationId) {
-            recordIdempotency(db, opts.operationId, "cleanup", idempotencyInput, response);
-          }
-          console.log(JSON.stringify(response, null, 2));
+          outputOk(data, true);
         } else {
           console.log(`Workspace ${result.workspaceId} cleaned`);
           console.log(`Path:    ${result.path}`);
@@ -657,7 +703,11 @@ program
       const globalOpts = program.opts<{ stateDir?: string }>();
       try {
         if (opts.mode !== "read" && opts.mode !== "write") {
-          outputError("INVALID_INPUT", `Invalid lock mode "${opts.mode}". Must be "read" or "write"`, useJson);
+          outputError(
+            "INVALID_INPUT",
+            `Invalid lock mode "${opts.mode}". Must be "read" or "write"`,
+            useJson
+          );
         }
         const { db } = setup(globalOpts.stateDir);
         const lock = lockWorkspace(
