@@ -4,6 +4,7 @@ import * as crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceSnapshot, ZigmaWorkspaceConfig } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceSnapshot,
@@ -42,7 +43,7 @@ export function createSnapshot(
 ): WorkspaceSnapshot {
   const row = getWorkspaceById(db, workspaceId);
   if (!row) {
-    throw new Error(`Workspace ${workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
   const snapId = `snap_${uuidv4()}`;

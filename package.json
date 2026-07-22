@@ -6,6 +6,9 @@
   "files": [
     "dist"
   ],
+  "exports": {
+    ".": "./dist/api/index.js"
+  },
   "bin": {
     "zigma-workspace": "./dist/cli/index.js"
   },

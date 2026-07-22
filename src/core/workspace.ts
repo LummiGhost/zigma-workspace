@@ -11,6 +11,7 @@ import type {
   WorkspaceRow,
   RepositoryCacheRow,
 } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 import {
   insertWorkspace,
   getWorkspaceById,
@@ -188,7 +189,7 @@ export function createWorkspace(
   emitEvent(db, wsId, "workspace.created", { branch, baseCommit });
 
   const finalRow = getWorkspaceById(db, wsId);
-  if (!finalRow) throw new Error(`Failed to retrieve workspace ${wsId} after creation`);
+  if (!finalRow) throw new ZigmaError("INTERNAL_ERROR", `Failed to retrieve workspace ${wsId} after creation`, { workspaceId: wsId });
 
   return rowToWorkspace(finalRow);
 }
@@ -199,7 +200,7 @@ export function bindRun(
 ): Workspace {
   const row = getWorkspaceById(db, input.workspaceId);
   if (!row) {
-    throw new Error(`Workspace ${input.workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${input.workspaceId} not found`, { workspaceId: input.workspaceId });
   }
 
   const ts = now();
@@ -233,7 +234,7 @@ export function bindRun(
   }
 
   const updated = getWorkspaceById(db, input.workspaceId);
-  if (!updated) throw new Error(`Workspace ${input.workspaceId} not found`);
+  if (!updated) throw new ZigmaError("INTERNAL_ERROR", `Workspace ${input.workspaceId} disappeared after bind`, { workspaceId: input.workspaceId });
 
   return rowToWorkspace(updated);
 }
@@ -243,7 +244,7 @@ export function getWorkspace(
   workspaceId: string
 ): Workspace {
   const row = getWorkspaceById(db, workspaceId);
-  if (!row) throw new Error(`Workspace ${workspaceId} not found`);
+  if (!row) throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   return rowToWorkspace(row);
 }
 

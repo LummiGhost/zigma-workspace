@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   updateWorkspaceStatus,
@@ -44,7 +45,7 @@ export function cleanupWorkspace(
 ): CleanupResult {
   const row = getWorkspaceById(db, workspaceId);
   if (!row) {
-    throw new Error(`Workspace ${workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
   if (row.status === "cleaned") {

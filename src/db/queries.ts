@@ -148,6 +148,47 @@ export function listSnapshotsForWorkspace(
     .all(workspaceId) as WorkspaceSnapshotRow[];
 }
 
+// ── Idempotency Records ─────────────────────────────────────────────────────
+
+export interface IdempotencyRow {
+  operation_id: string;
+  command: string;
+  input_hash: string;
+  result_json: string;
+  created_at: string;
+}
+
+export function getIdempotencyRecord(
+  db: Database.Database,
+  operationId: string
+): IdempotencyRow | undefined {
+  return db
+    .prepare("SELECT * FROM workspace_idempotency WHERE operation_id = ?")
+    .get(operationId) as IdempotencyRow | undefined;
+}
+
+export function insertIdempotencyRecord(
+  db: Database.Database,
+  row: IdempotencyRow
+): void {
+  db.prepare(`
+    INSERT INTO workspace_idempotency
+      (operation_id, command, input_hash, result_json, created_at)
+    VALUES
+      (@operation_id, @command, @input_hash, @result_json, @created_at)
+  `).run(row);
+}
+
+export function updateIdempotencyResult(
+  db: Database.Database,
+  operationId: string,
+  resultJson: string
+): void {
+  db.prepare(
+    "UPDATE workspace_idempotency SET result_json = ? WHERE operation_id = ?"
+  ).run(resultJson, operationId);
+}
+
 // ── Workspace Events ────────────────────────────────────────────────────────
 
 export function insertWorkspaceEvent(

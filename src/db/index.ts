@@ -52,22 +52,35 @@ CREATE TABLE IF NOT EXISTS workspace_events (
   data TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS workspace_idempotency (
+  operation_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
-let _db: Database.Database | null = null;
+const _dbMap = new Map<string, Database.Database>();
 
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
-  if (_db) return _db;
-  _db = new Database(config.dbPath);
-  _db.pragma("journal_mode = WAL");
-  _db.pragma("foreign_keys = ON");
-  _db.exec(SCHEMA_SQL);
-  return _db;
+  const existing = _dbMap.get(config.dbPath);
+  if (existing) return existing;
+  const db = new Database(config.dbPath);
+  db.pragma("journal_mode = WAL");
+  db.pragma("foreign_keys = ON");
+  db.exec(SCHEMA_SQL);
+  _dbMap.set(config.dbPath, db);
+  return db;
 }
 
-export function closeDb(): void {
-  if (_db) {
-    _db.close();
-    _db = null;
+export function closeDb(config?: ZigmaWorkspaceConfig): void {
+  if (config) {
+    const db = _dbMap.get(config.dbPath);
+    if (db) { db.close(); _dbMap.delete(config.dbPath); }
+  } else {
+    for (const db of _dbMap.values()) db.close();
+    _dbMap.clear();
   }
 }

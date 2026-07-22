@@ -4,6 +4,7 @@ import * as crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceDiff, ZigmaWorkspaceConfig } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 import { getWorkspaceById, insertWorkspaceEvent } from "../db/queries.js";
 import {
   getStatus,
@@ -45,13 +46,11 @@ export function collectDiff(
 ): WorkspaceDiff {
   const row = getWorkspaceById(db, workspaceId);
   if (!row) {
-    throw new Error(`Workspace ${workspaceId} not found`);
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
   if (!fs.existsSync(row.path)) {
-    throw new Error(
-      `Workspace directory does not exist: ${row.path}`
-    );
+    throw new ZigmaError("WORKSPACE_DIRECTORY_NOT_FOUND", `Workspace directory does not exist: ${row.path}`, { workspaceId, path: row.path });
   }
 
   const baseCommit = row.base_commit;
@@ -79,14 +78,20 @@ export function collectDiff(
     summary += `\ndiff stat:\n${diffStat}\n`;
   }
 
-  // Determine patch path
+  // Determine patch path and digest
   let resolvedPatchPath: string | undefined;
-  if (patchOutPath) {
+  let patchDigest: string | undefined;
+
+  if (patch.trim()) {
+    patchDigest = sha256(patch);
+    if (patchOutPath) {
+      resolvedPatchPath = patchOutPath;
+    } else {
+      const patchFileName = `${workspaceId}-${Date.now()}.patch`;
+      resolvedPatchPath = path.join(config.snapshotsDir, patchFileName);
+    }
+  } else if (patchOutPath) {
     resolvedPatchPath = patchOutPath;
-  } else if (patch.trim()) {
-    // Write patch to snapshots directory
-    const patchFileName = `${workspaceId}-${Date.now()}.patch`;
-    resolvedPatchPath = path.join(config.snapshotsDir, patchFileName);
   }
 
   if (resolvedPatchPath && patch) {
@@ -98,7 +103,7 @@ export function collectDiff(
     changedFiles: totalChanged,
     untrackedFiles: totalUntracked,
     patchPath: resolvedPatchPath,
-    patchChecksum: patch ? sha256(patch) : null,
+    patchChecksum: patchDigest ?? null,
   });
 
   return {
@@ -109,6 +114,7 @@ export function collectDiff(
     untrackedFiles,
     statusText,
     patchPath: resolvedPatchPath,
+    patchDigest,
     summary,
   };
 }

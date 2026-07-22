@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { ZigmaError } from "../types/index.js";
 
 const STATE_DIR_NAME = ".zigma-workspace";
 
@@ -13,8 +14,11 @@ function getStateDir(): string {
   return path.join(os.homedir(), STATE_DIR_NAME);
 }
 
-export function getConfig(): ZigmaWorkspaceConfig {
-  const stateDir = getStateDir();
+export function getConfig(stateDirOverride?: string): ZigmaWorkspaceConfig {
+  if (stateDirOverride !== undefined && !path.isAbsolute(stateDirOverride)) {
+    throw new ZigmaError("INVALID_INPUT", `--state-dir must be an absolute path, got: "${stateDirOverride}"`);
+  }
+  const stateDir = stateDirOverride ?? getStateDir();
   return {
     stateDir,
     repoCacheDir: path.join(stateDir, "repo-cache"),
