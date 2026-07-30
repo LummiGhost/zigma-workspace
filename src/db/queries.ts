@@ -197,9 +197,9 @@ export function insertWorkspaceEvent(
 ): void {
   db.prepare(`
     INSERT INTO workspace_events
-      (id, workspace_id, event, data, created_at)
+      (id, workspace_id, type, timestamp, actor, payload)
     VALUES
-      (@id, @workspace_id, @event, @data, @created_at)
+      (@id, @workspace_id, @type, @timestamp, @actor, @payload)
   `).run(row);
 }
 
@@ -209,7 +209,7 @@ export function listEventsForWorkspace(
 ): WorkspaceEventRow[] {
   return db
     .prepare(
-      "SELECT * FROM workspace_events WHERE workspace_id = ? ORDER BY created_at ASC"
+      "SELECT * FROM workspace_events WHERE workspace_id = ? ORDER BY timestamp ASC"
     )
     .all(workspaceId) as WorkspaceEventRow[];
 }

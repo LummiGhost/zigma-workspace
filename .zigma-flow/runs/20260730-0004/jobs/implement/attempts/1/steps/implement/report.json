@@ -1,0 +1,19 @@
+{
+  "outputs": {
+    "files_changed": [
+      "src/types/index.ts",
+      "src/db/index.ts",
+      "src/db/queries.ts",
+      "src/core/events.ts",
+      "src/core/workspace.ts",
+      "src/core/lock.ts",
+      "src/core/snapshot.ts",
+      "src/core/cleanup.ts",
+      "src/core/diff.ts"
+    ],
+    "summary": "Implemented standardized WorkspaceEvent schema per Issue #8. Added WorkspaceEvent interface and WorkspaceEventType constants to types. Updated DB schema with migration logic (renamed event→type, data→payload, created_at→timestamp; added actor column). Created centralized emitWorkspaceEvent() helper in src/core/events.ts. Replaced all 4 duplicate local emitEvent helpers. Emitted all 7 required event types at correct lifecycle points: workspace.created (after row insert), workspace.prepared (after status→prepared), workspace.started (in bindRun), workspace.snapshot_created (in createSnapshot), workspace.lock_acquired (in lockWorkspace), workspace.lock_released (in unlockWorkspace), workspace.cleaned (in cleanupWorkspace). npm run check passes (typecheck + build + smoke test)."
+  },
+  "artifacts": [],
+  "signals": [],
+  "summary": "Standardized workspace event schema: added WorkspaceEvent interface, WorkspaceEventType enum, DB migration for new columns (type/timestamp/actor/payload), centralized emitWorkspaceEvent helper, and emitted all 7 event types at correct lifecycle points. Build, typecheck, and smoke test all pass."
+}

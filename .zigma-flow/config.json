@@ -1,0 +1,25 @@
+{
+  "tool_version": "0.8.0",
+  "agent": {
+    "backend": "claude-code",
+    "backends": {
+      "claude-code": {
+        "command": "claude",
+        "args": [
+          "-p",
+          "--dangerously-skip-permissions"
+        ],
+        "timeout": 600000,
+        "env": {
+          "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+          "ANTHROPIC_API_KEY": "sk-4e65d3328f634f819934ec4ff4ebb88c",
+          "ANTHROPIC_MODEL": "deepseek-v4-pro",
+          "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4-pro",
+          "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4-flash",
+          "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4-flash",
+          "CLAUDE_CODE_EFFORT_LEVEL": "max"
+        }
+      }
+    }
+  }
+}

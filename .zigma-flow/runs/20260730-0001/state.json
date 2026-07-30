@@ -1,0 +1,62 @@
+{
+  "run_id": "20260730-0001",
+  "workflow": "issue3-workspace-state-machine",
+  "task": "Implement GitHub Issue #3: feat: add Workspace State Machine\n\n## Background\nWorkspace lifecycle should be explicitly modeled instead of being inferred only from commands.\nZigma execution requires deterministic workspace state tracking for workflow orchestration, UI display, and audit.\n\n## Requirements\nAdd a WorkspaceStatus state machine with the following transitions:\nCREATED -> PREPARING -> READY -> RUNNING -> WAIT_REVIEW -> MERGED -> CLEANED\n\nSpecific implementation tasks:\n1. Add WorkspaceStatus type to src/types/ with the 7 states listed above.\n2. Add a `status` field to the workspaces DB table (src/db/index.ts) with default 'CREATED'.\n3. Add a `status` field to the Workspace TypeScript interface in src/types/.\n4. Implement a transition validator in src/core/workspace.ts that only allows legal transitions:\n   - CREATED -> PREPARING\n   - PREPARING -> READY\n   - READY -> RUNNING\n   - RUNNING -> WAIT_REVIEW, RUNNING -> READY (if reverted)\n   - WAIT_REVIEW -> MERGED, WAIT_REVIEW -> RUNNING (if changes needed)\n   - Any state -> CLEANED\n5. Add a `transitionStatus(workspaceId, newStatus)` method in src/core/workspace.ts that:\n   - Validates the transition is legal\n   - Updates the DB\n   - Records a workspace_status_changed event in workspace_events table\n6. Update relevant queries in src/db/queries.ts to read/write status.\n7. Expose the current status in all CLI `inspect`/`list` command output (src/cli/).\n\n## Build validation\nAfter implementing, verify with: npm run check\n(this runs typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- Better-sqlite3 for DB (synchronous API, no async)\n- All IDs prefixed: ws_, cache_, lock_, snap_, evt_\n- CLI uses Commander.js\n- See CLAUDE.md for full architecture details",
+  "created_at": "2026-07-30T12:05:29.918Z",
+  "last_event_id": "evt-029",
+  "jobs": {
+    "intake": {
+      "status": "completed",
+      "attempt": 1,
+      "attempts": [
+        {
+          "number": 1,
+          "started_at": "2026-07-30T12:05:29.923Z",
+          "step_count": 1,
+          "status": "success",
+          "ended_at": "2026-07-30T12:06:31.798Z"
+        }
+      ],
+      "outputs": {
+        "task_summary": "Add a WorkspaceStatus state machine with 7 states (CREATED, PREPARING, READY, RUNNING, WAIT_REVIEW, MERGED, CLEANED), a transition validator enforcing legal state transitions, a transitionStatus() method that validates, updates DB, and records events, and expose status in all CLI inspect/list output. Introduce a WorkspaceStatus type in src/types/, update the Workspace interface, add transition logic in src/core/workspace.ts, and update DB schema default from 'created' to 'CREATED'.",
+        "scope": "medium",
+        "complexity_profile": "medium",
+        "risk_notes": [
+          "Status casing migration: task requires UPPERCASE states (CREATED, PREPARING, etc.) but existing code uses lowercase (created, prepared, locked, active, archived, failed). This is a breaking API/DB change. The task does not specify backward-compatibility or migration strategy.",
+          "DB default value change: SQLite does not support ALTER COLUMN DEFAULT natively; changing the default from 'created' to 'CREATED' requires careful handling for existing rows that may retain old lowercase values.",
+          "Existing status values differ from target: current states (created, prepared, locked, active, archived, cleaned, failed) must be replaced by new states (CREATED, PREPARING, READY, RUNNING, WAIT_REVIEW, MERGED, CLEANED). createWorkspace sets 'created'->'prepared'; under the new model these become 'CREATED'->'PREPARING'. bindRun sets 'active'; this maps to part of the RUNNING transition. cleanupWorkspace sets 'cleaned'; this maps to CLEANED. The 'locked', 'failed', and 'archived' states have no direct equivalent in the new model.",
+          "No migration script or rollback plan specified in requirements. If existing databases contain workspaces with old status values, queries filtering by new status names may silently miss them."
+        ]
+      }
+    },
+    "implement": {
+      "status": "completed",
+      "current_step": "collect-diff",
+      "attempt": 1,
+      "outputs": {
+        "files_changed": [
+          "src/types/index.ts",
+          "src/db/index.ts",
+          "src/core/workspace.ts",
+          "src/core/cleanup.ts",
+          "src/core/lock.ts"
+        ],
+        "summary": "Implemented Workspace State Machine (Issue #3). Added WorkspaceStatus type with 7 states (CREATED, PREPARING, READY, RUNNING, WAIT_REVIEW, MERGED, CLEANED). Added LEGAL_TRANSITIONS map and transitionStatus() validator to src/core/workspace.ts that validates transitions, updates the DB, and records workspace_status_changed events. Updated createWorkspace to transition CREATED->PREPARING->READY. Updated bindRun to transition to RUNNING. Updated cleanupWorkspace to use transitionStatus for CLEANED. Decoupled lock.ts from workspace status (lock state tracked in workspace_locks table only). Updated DB schema default to 'CREATED'. CLI output already reflected status through formatWorkspace(). Build passes: typecheck + build + smoke test all green."
+      },
+      "step_visits": {
+        "collect-diff": 1
+      }
+    },
+    "validate": {
+      "status": "completed",
+      "current_step": "check",
+      "attempt": 1
+    },
+    "create-pr": {
+      "status": "completed",
+      "current_step": "create-branch",
+      "attempt": 1
+    }
+  },
+  "status": "completed"
+}

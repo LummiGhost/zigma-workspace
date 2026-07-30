@@ -146,10 +146,32 @@ export interface WorkspaceSnapshotRow {
 export interface WorkspaceEventRow {
   id: string;
   workspace_id: string;
-  event: string;
-  data: string | null;
-  created_at: string;
+  type: string;
+  timestamp: string;
+  actor: string;
+  payload: string | null;
 }
+
+export interface WorkspaceEvent {
+  type: string;
+  timestamp: string;
+  actor: string;
+  workspaceId: string;
+  payload: Record<string, unknown>;
+}
+
+export const WorkspaceEventType = {
+  CREATED: "workspace.created",
+  PREPARED: "workspace.prepared",
+  STARTED: "workspace.started",
+  SNAPSHOT_CREATED: "workspace.snapshot_created",
+  LOCK_ACQUIRED: "workspace.lock_acquired",
+  LOCK_RELEASED: "workspace.lock_released",
+  CLEANED: "workspace.cleaned",
+} as const;
+
+export type WorkspaceEventTypeValue =
+  (typeof WorkspaceEventType)[keyof typeof WorkspaceEventType];
 
 // ── Contract types ───────────────────────────────────────────────────────────
 

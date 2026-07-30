@@ -1,0 +1,72 @@
+{
+  "run_id": "20260730-0004",
+  "workflow": "issue8-workspace-event-schema",
+  "task": "Implement GitHub Issue #8: feat: standardize Workspace Event Schema\n\n## Background\nWorkspace events will be consumed by zigma-core, zigma-flow, audit systems and UI components.\nA stable event model is required for integration.\n\n## Requirements\n\n### Event Schema\nDefine and enforce a standardized event shape for ALL workspace events:\n\n```typescript\ninterface WorkspaceEvent {\n  type: string;          // e.g. \"workspace.created\"\n  timestamp: string;     // ISO 8601\n  actor: string;         // agent-id, user-id, or \"system\"\n  workspaceId: string;   // ws_<uuid>\n  payload: Record<string, unknown>;  // event-specific data\n}\n```\n\n### Recommended events to implement\n- workspace.created   -- emitted when workspace row is first inserted\n- workspace.prepared  -- emitted when workspace transitions to READY/PREPARED\n- workspace.started   -- emitted when execution begins (RUNNING)\n- workspace.snapshot_created -- emitted when a snapshot is taken\n- workspace.lock_acquired    -- emitted when lock is acquired\n- workspace.lock_released    -- emitted when lock is released\n- workspace.cleaned   -- emitted when workspace is cleaned up\n\n### Implementation tasks\n1. Add WorkspaceEvent TypeScript interface to src/types/index.ts.\n2. Add typed event name constants/enum (e.g. WorkspaceEventType) in src/types/index.ts.\n3. Update src/db/queries.ts to store/retrieve events using the new schema fields.\n4. Ensure all existing event insertions in src/core/ emit the standardized fields (type, timestamp, actor, workspaceId, payload).\n5. Add helper function (e.g. emitWorkspaceEvent()) in src/core/ to create events in a consistent shape.\n6. All 7 event types above must be emitted at the correct lifecycle points.\n\n## Build validation\nAfter implementing: npm run check\n(typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- better-sqlite3 (synchronous API)\n- Events stored in workspace_events table: see src/db/index.ts\n- Current event insertions in src/core/workspace.ts\n- All entity IDs prefixed: ws_, evt_\n- See CLAUDE.md for architecture details",
+  "created_at": "2026-07-30T12:21:31.478Z",
+  "last_event_id": "evt-025",
+  "jobs": {
+    "intake": {
+      "status": "completed",
+      "attempt": 1,
+      "attempts": [
+        {
+          "number": 1,
+          "started_at": "2026-07-30T12:21:31.483Z",
+          "step_count": 1,
+          "status": "success",
+          "ended_at": "2026-07-30T12:22:25.324Z"
+        }
+      ],
+      "outputs": {
+        "task_summary": "Implement GitHub Issue #8: Define a standardized WorkspaceEvent interface in src/types/index.ts with fields (type, timestamp, actor, workspaceId, payload), add a WorkspaceEventType enum with 7 event type constants, update the workspace_events DB schema and queries to store/retrieve the new fields, consolidate four duplicate emitEvent() helpers into one centralized emitWorkspaceEvent() in src/core/, and ensure all lifecycle points emit the correct typed events (workspace.created, workspace.prepared, workspace.started, workspace.snapshot_created, workspace.lock_acquired, workspace.lock_released, workspace.cleaned).",
+        "scope": "medium",
+        "complexity_profile": {
+          "files_touched": 7,
+          "new_types": 2,
+          "db_schema_migration": true,
+          "refactoring": "consolidate 4 duplicate emitEvent helpers into 1 centralized function",
+          "event_renames": 5,
+          "new_events": 2,
+          "risk_areas": [
+            "DB schema migration: workspace_events table needs new columns (type, timestamp, actor, payload) while preserving backward compatibility with existing rows",
+            "Event name changes: workspace.locked → workspace.lock_acquired, workspace.unlocked → workspace.lock_released, workspace.bound → workspace.started, workspace.snapshot.created → workspace.snapshot_created",
+            "Workspace.prepared event: currently workspace.created is emitted after status update to 'prepared' — need to split into two distinct events",
+            "Actor field: must be threaded through all core functions (createWorkspace, lockWorkspace, unlockWorkspace, cleanupWorkspace, createSnapshot, bindRun)"
+          ]
+        }
+      }
+    },
+    "implement": {
+      "status": "completed",
+      "current_step": "collect-diff",
+      "attempt": 1,
+      "outputs": {
+        "files_changed": [
+          "src/types/index.ts",
+          "src/db/index.ts",
+          "src/db/queries.ts",
+          "src/core/events.ts",
+          "src/core/workspace.ts",
+          "src/core/lock.ts",
+          "src/core/snapshot.ts",
+          "src/core/cleanup.ts",
+          "src/core/diff.ts"
+        ],
+        "summary": "Implemented standardized WorkspaceEvent schema per Issue #8. Added WorkspaceEvent interface and WorkspaceEventType constants to types. Updated DB schema with migration logic (renamed event→type, data→payload, created_at→timestamp; added actor column). Created centralized emitWorkspaceEvent() helper in src/core/events.ts. Replaced all 4 duplicate local emitEvent helpers. Emitted all 7 required event types at correct lifecycle points: workspace.created (after row insert), workspace.prepared (after status→prepared), workspace.started (in bindRun), workspace.snapshot_created (in createSnapshot), workspace.lock_acquired (in lockWorkspace), workspace.lock_released (in unlockWorkspace), workspace.cleaned (in cleanupWorkspace). npm run check passes (typecheck + build + smoke test)."
+      },
+      "step_visits": {
+        "collect-diff": 1
+      }
+    },
+    "validate": {
+      "status": "completed",
+      "current_step": "check",
+      "attempt": 1
+    },
+    "create-pr": {
+      "status": "running",
+      "current_step": "commit-push-pr",
+      "attempt": 1
+    }
+  }
+}

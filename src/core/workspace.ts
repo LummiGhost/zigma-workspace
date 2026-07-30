@@ -21,8 +21,9 @@ import {
   insertRepositoryCache,
   getRepositoryCacheByUrl,
   updateRepositoryCacheFetched,
-  insertWorkspaceEvent,
 } from "../db/queries.js";
+import { WorkspaceEventType } from "../types/index.js";
+import { emitWorkspaceEvent } from "./events.js";
 import {
   checkGitAvailable,
   hashRepoUrl,
@@ -54,21 +55,6 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
 }
 
 /**
@@ -165,6 +151,11 @@ export function createWorkspace(
 
   insertWorkspace(db, row);
 
+  emitWorkspaceEvent(db, wsId, WorkspaceEventType.CREATED, {
+    branch,
+    baseCommit,
+  });
+
   // Write manifest
   const manifest: WorkspaceManifest = {
     workspace_id: wsId,
@@ -186,7 +177,10 @@ export function createWorkspace(
 
   // Mark as prepared
   updateWorkspaceStatus(db, wsId, "prepared", now());
-  emitEvent(db, wsId, "workspace.created", { branch, baseCommit });
+  emitWorkspaceEvent(db, wsId, WorkspaceEventType.PREPARED, {
+    branch,
+    baseCommit,
+  });
 
   const finalRow = getWorkspaceById(db, wsId);
   if (!finalRow) throw new ZigmaError("INTERNAL_ERROR", `Failed to retrieve workspace ${wsId} after creation`, { workspaceId: wsId });
@@ -213,7 +207,7 @@ export function bindRun(
   );
   updateWorkspaceStatus(db, input.workspaceId, "active", ts);
 
-  emitEvent(db, input.workspaceId, "workspace.bound", {
+  emitWorkspaceEvent(db, input.workspaceId, WorkspaceEventType.STARTED, {
     taskId: input.taskId,
     flowRunId: input.flowRunId,
   });

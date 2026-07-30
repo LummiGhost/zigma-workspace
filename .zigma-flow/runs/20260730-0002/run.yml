@@ -1,0 +1,9 @@
+task: "Commit and push Workspace State Machine implementation (Issue #3), create PR"
+workflow:
+  name: finalize-pr
+  path: D:\zigma\zigma-workspace\.zigma-flow\workflows\finalize-pr.yml
+created_at: 2026-07-30T12:14:54.205Z
+skill_lock_snapshot: skill-lock.snapshot.json
+inputs:
+  task: "Commit and push Workspace State Machine implementation (Issue #3), create
+    PR"

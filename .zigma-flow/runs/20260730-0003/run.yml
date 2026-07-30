@@ -1,0 +1,185 @@
+task: >-
+  Implement GitHub Issue #8: feat: standardize Workspace Event Schema
+
+
+  ## Background
+
+  Workspace events will be consumed by zigma-core, zigma-flow, audit systems and
+  UI components.
+
+  A stable event model is required for integration.
+
+
+  ## Requirements
+
+
+  ### Event Schema
+
+  Define and enforce a standardized event shape for ALL workspace events:
+
+
+  ```typescript
+
+  interface WorkspaceEvent {
+    type: string;          // e.g. "workspace.created"
+    timestamp: string;     // ISO 8601
+    actor: string;         // agent-id, user-id, or "system"
+    workspaceId: string;   // ws_<uuid>
+    payload: Record<string, unknown>;  // event-specific data
+  }
+
+  ```
+
+
+  ### Recommended events to implement
+
+  - `workspace.created`   — emitted when workspace row is first inserted
+
+  - `workspace.prepared`  — emitted when workspace transitions to READY/PREPARED
+
+  - `workspace.started`   — emitted when execution begins (RUNNING)
+
+  - `workspace.snapshot_created` — emitted when a snapshot is taken
+
+  - `workspace.lock_acquired`    — emitted when lock is acquired
+
+  - `workspace.lock_released`    — emitted when lock is released
+
+  - `workspace.cleaned`   — emitted when workspace is cleaned up
+
+
+  ### Implementation tasks
+
+  1. Add `WorkspaceEvent` TypeScript interface to `src/types/index.ts`.
+
+  2. Add typed event name constants/enum (e.g. `WorkspaceEventType`) in
+  `src/types/index.ts`.
+
+  3. Update `src/db/queries.ts` to store/retrieve events using the new schema
+  fields.
+
+  4. Ensure all existing event insertions in `src/core/` emit the standardized
+  fields (type, timestamp, actor, workspaceId, payload).
+
+  5. Add helper function (e.g. `emitWorkspaceEvent()`) in `src/core/` to create
+  events in a consistent shape.
+
+  6. All 7 event types above must be emitted at the correct lifecycle points.
+
+
+  ## Build validation
+
+  After implementing: npm run check
+
+  (typecheck + build + smoke test)
+
+
+  ## Codebase notes
+
+  - Source in src/, built to dist/ with tsc
+
+  - better-sqlite3 (synchronous API)
+
+  - Events stored in workspace_events table: see src/db/index.ts
+
+  - Current event insertions in src/core/workspace.ts
+
+  - All entity IDs prefixed: ws_, evt_
+
+  - See CLAUDE.md for architecture details
+workflow:
+  name: issue8-workspace-event-schema
+  path: D:\zigma\zigma-workspace\.zigma-flow\workflows\issue8-workspace-event-schema.yml
+created_at: 2026-07-30T12:16:29.439Z
+skill_lock_snapshot: skill-lock.snapshot.json
+inputs:
+  task: >-
+    Implement GitHub Issue #8: feat: standardize Workspace Event Schema
+
+
+    ## Background
+
+    Workspace events will be consumed by zigma-core, zigma-flow, audit systems
+    and UI components.
+
+    A stable event model is required for integration.
+
+
+    ## Requirements
+
+
+    ### Event Schema
+
+    Define and enforce a standardized event shape for ALL workspace events:
+
+
+    ```typescript
+
+    interface WorkspaceEvent {
+      type: string;          // e.g. "workspace.created"
+      timestamp: string;     // ISO 8601
+      actor: string;         // agent-id, user-id, or "system"
+      workspaceId: string;   // ws_<uuid>
+      payload: Record<string, unknown>;  // event-specific data
+    }
+
+    ```
+
+
+    ### Recommended events to implement
+
+    - `workspace.created`   — emitted when workspace row is first inserted
+
+    - `workspace.prepared`  — emitted when workspace transitions to
+    READY/PREPARED
+
+    - `workspace.started`   — emitted when execution begins (RUNNING)
+
+    - `workspace.snapshot_created` — emitted when a snapshot is taken
+
+    - `workspace.lock_acquired`    — emitted when lock is acquired
+
+    - `workspace.lock_released`    — emitted when lock is released
+
+    - `workspace.cleaned`   — emitted when workspace is cleaned up
+
+
+    ### Implementation tasks
+
+    1. Add `WorkspaceEvent` TypeScript interface to `src/types/index.ts`.
+
+    2. Add typed event name constants/enum (e.g. `WorkspaceEventType`) in
+    `src/types/index.ts`.
+
+    3. Update `src/db/queries.ts` to store/retrieve events using the new schema
+    fields.
+
+    4. Ensure all existing event insertions in `src/core/` emit the standardized
+    fields (type, timestamp, actor, workspaceId, payload).
+
+    5. Add helper function (e.g. `emitWorkspaceEvent()`) in `src/core/` to
+    create events in a consistent shape.
+
+    6. All 7 event types above must be emitted at the correct lifecycle points.
+
+
+    ## Build validation
+
+    After implementing: npm run check
+
+    (typecheck + build + smoke test)
+
+
+    ## Codebase notes
+
+    - Source in src/, built to dist/ with tsc
+
+    - better-sqlite3 (synchronous API)
+
+    - Events stored in workspace_events table: see src/db/index.ts
+
+    - Current event insertions in src/core/workspace.ts
+
+    - All entity IDs prefixed: ws_, evt_
+
+    - See CLAUDE.md for architecture details

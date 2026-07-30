@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceDiff, ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { getWorkspaceById, insertWorkspaceEvent } from "../db/queries.js";
+import { getWorkspaceById } from "../db/queries.js";
+import { emitWorkspaceEvent } from "./events.js";
 import {
   getStatus,
   getChangedFiles,
@@ -14,25 +14,6 @@ import {
   generatePatch,
   getHeadCommit,
 } from "../git/index.js";
-
-function now(): string {
-  return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
-}
 
 function sha256(content: string): string {
   return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
@@ -99,7 +80,7 @@ export function collectDiff(
     fs.writeFileSync(resolvedPatchPath, patch, "utf-8");
   }
 
-  emitEvent(db, workspaceId, "workspace.diff.collected", {
+  emitWorkspaceEvent(db, workspaceId, "workspace.diff.collected", {
     changedFiles: totalChanged,
     untrackedFiles: totalUntracked,
     patchPath: resolvedPatchPath,

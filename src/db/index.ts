@@ -48,9 +48,10 @@ CREATE TABLE IF NOT EXISTS workspace_snapshots (
 CREATE TABLE IF NOT EXISTS workspace_events (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
-  event TEXT NOT NULL,
-  data TEXT,
-  created_at TEXT NOT NULL
+  type TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT 'system',
+  payload TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_idempotency (
@@ -71,6 +72,26 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+
+  // Migrate legacy workspace_events schema
+  const colInfo = db.pragma("table_info(workspace_events)") as {
+    name: string;
+  }[];
+  const hasOldEventCol = colInfo.some((c) => c.name === "event");
+  if (hasOldEventCol) {
+    db.exec(`
+      ALTER TABLE workspace_events RENAME COLUMN event TO type;
+      ALTER TABLE workspace_events RENAME COLUMN data TO payload;
+      ALTER TABLE workspace_events RENAME COLUMN created_at TO timestamp;
+    `);
+  }
+  const hasActorCol = colInfo.some((c) => c.name === "actor");
+  if (!hasActorCol) {
+    db.exec(
+      "ALTER TABLE workspace_events ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'"
+    );
+  }
+
   _dbMap.set(config.dbPath, db);
   return db;
 }
