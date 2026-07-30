@@ -18,6 +18,11 @@ import { createSnapshot, listSnapshots, getArtifact, listWorkspaceArtifacts } fr
 import { cleanupWorkspace } from "../core/cleanup.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
+import {
+  loadDefinition,
+  validateDefinition,
+  DefinitionError,
+} from "../definition/index.js";
 import type { Workspace, ZigmaErrorCode } from "../types/index.js";
 import type Database from "better-sqlite3";
 
@@ -974,6 +979,64 @@ program
       }
     }
   );
+
+// ── validate ──────────────────────────────────────────────────────────────────
+
+program
+  .command("validate")
+  .description("Validate a workspace definition file")
+  .requiredOption("--definition <path>", "Path to workspace definition YAML file")
+  .option("--json", "Output JSON")
+  .action(async (opts: { definition: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      let def;
+      try {
+        def = loadDefinition(opts.definition);
+      } catch (err) {
+        if (err instanceof DefinitionError) {
+          if (useJson) {
+            console.log(
+              JSON.stringify({ valid: false, errors: [err.message] }, null, 2)
+            );
+          } else {
+            console.error(`Error: ${err.message}`);
+          }
+          process.exit(1);
+        }
+        throw err;
+      }
+
+      const result = validateDefinition(def);
+
+      if (useJson) {
+        console.log(
+          JSON.stringify(
+            {
+              valid: result.valid,
+              errors: result.errors,
+              ...(result.valid ? { definition: def } : {}),
+            },
+            null,
+            2
+          )
+        );
+      } else {
+        if (result.valid) {
+          console.log("Definition is valid");
+        } else {
+          console.log("Validation errors:");
+          for (const err of result.errors) {
+            console.log(`  - ${err}`);
+          }
+        }
+      }
+
+      process.exit(result.valid ? 0 : 1);
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 

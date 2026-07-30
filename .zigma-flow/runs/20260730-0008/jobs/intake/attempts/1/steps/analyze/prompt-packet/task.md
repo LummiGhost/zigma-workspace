@@ -1,0 +1,71 @@
+Overall run task:
+
+Implement GitHub Issue #7 (sub-task 1 of 7): add YAML workspace definition schema, loader, validator and CLI validate command.
+
+## Scope (this PR only)
+Sub-task 1: YAML schema + loader + validator + CLI `validate --definition`.
+OUT OF SCOPE: docker type, workspace composition, plugins, zigma-flow integration, automated tests beyond npm run check.
+
+## Background
+zigma-workspace currently only accepts CLI arguments. We need a declarative YAML workspace definition file that can be version-controlled and reused.
+
+## YAML definition format (worktree type only for this PR)
+
+```yaml
+apiVersion: zigma.ai/v1alpha1
+kind: Workspace
+metadata:
+  name: my-workspace        # required, alphanumeric + hyphens
+spec:
+  type: worktree            # only "worktree" required for this PR
+  base: origin/main         # required: ref or branch
+  env:                      # optional key-value pairs
+    NODE_ENV: development
+  diff:
+    ignore:                 # optional gitignore-style patterns
+      - node_modules/
+      - dist/
+```
+
+## Implementation tasks
+
+1. Create `src/types/definition.ts` with TypeScript interfaces:
+   - `WorkspaceDefinition` (top level: apiVersion, kind, metadata, spec)
+   - `WorkspaceDefinitionMetadata` (name: string)
+   - `WorkspaceDefinitionSpec` (type: "worktree" | "docker" | "workspace", base: string, env?: Record<string,string>, diff?: {ignore?: string[]})
+
+2. Create `src/definition/loader.ts`:
+   - `loadDefinition(filePath: string): WorkspaceDefinition` — reads and parses YAML file
+   - Use `js-yaml` package (add to dependencies if not present) or Node's built-in if available
+   - Throw a typed `DefinitionError` with clear message on parse failure
+
+3. Create `src/definition/validator.ts`:
+   - `validateDefinition(def: WorkspaceDefinition): ValidationResult` where `ValidationResult = { valid: boolean; errors: string[] }`
+   - Validate: apiVersion === "zigma.ai/v1alpha1", kind === "Workspace", metadata.name is non-empty alphanumeric+hyphens, spec.type is one of the enum values, spec.base is non-empty
+   - Return all errors, not just the first
+
+4. Create `src/definition/index.ts` re-exporting loader and validator.
+
+5. Add `zigma-workspace validate --definition <path>` CLI command in `src/cli/index.ts`:
+   - Load and validate the definition file
+   - Human output: print "valid" or list errors
+   - `--json` output: `{ valid: boolean, errors: string[], definition?: WorkspaceDefinition }`
+   - Exit code 0 if valid, 1 if invalid
+
+6. Create fixture files at `fixtures/workspace-definition/`:
+   - `valid.yaml` — a complete valid worktree definition
+   - `invalid.yaml` — a definition with schema errors (wrong apiVersion, missing base, etc.)
+
+## Build validation
+After implementing: npm run check
+(typecheck + build + smoke test — no new test runner needed)
+
+## Codebase notes
+- Source in src/, built to dist/ with tsc
+- ESM module ("type": "module" in package.json)
+- Commander.js for CLI (src/cli/index.ts)
+- TypeScript strict mode, NodeNext module resolution
+- See CLAUDE.md for architecture details
+- Check package.json for existing dependencies before adding new ones
+
+This task prompt is stable for the run. Do not let the step prompt replace or dilute the overall task.

@@ -1,0 +1,13 @@
+apiVersion: zigma.ai/v1alpha1
+kind: Workspace
+metadata:
+  name: my-workspace
+spec:
+  type: worktree
+  base: origin/main
+  env:
+    NODE_ENV: development
+  diff:
+    ignore:
+      - node_modules/
+      - dist/

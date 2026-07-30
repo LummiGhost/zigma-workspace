@@ -1,0 +1,77 @@
+name: issue7-yaml-workspace-definition
+version: 1.0.0
+description: >
+  Implement GitHub Issue #7 sub-task 1: YAML workspace definition schema, loader,
+  validator, and CLI validate command. Scoped to worktree type only; docker/workspace
+  types, plugins, and zigma-flow integration are out of scope for this first slice.
+
+on:
+  manual:
+
+inputs:
+  task:
+    type: string
+    required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+jobs:
+  intake:
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - intake
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        failure_policy: fail
+
+  validate:
+    needs:
+      - implement
+    steps:
+      - id: check
+        type: script
+        run: "npm run check"
+        timeout: "3m"
+        failure_policy: fail
+
+  create-pr:
+    needs:
+      - validate
+    steps:
+      - id: commit-push-pr
+        type: script
+        run: "git checkout -b feat/issue-7-yaml-workspace-definition && git add -A && git commit -m \"feat: add YAML workspace definition schema, loader and validate CLI (closes #7)\" && git push -u origin feat/issue-7-yaml-workspace-definition && gh pr create --title \"feat: add YAML workspace definition files\" --body \"Closes #7\n\nScope: sub-task 1 — YAML schema, loader, validator and CLI validate command for the worktree type.\" --head feat/issue-7-yaml-workspace-definition"
+        failure_policy: fail

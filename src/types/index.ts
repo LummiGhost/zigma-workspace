@@ -225,7 +225,8 @@ export type ZigmaErrorCode =
   | "GIT_ERROR"
   | "INVALID_INPUT"
   | "OPERATION_ID_CONFLICT"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  | "DEFINITION_ERROR";
 
 export class ZigmaError extends Error {
   readonly code: ZigmaErrorCode;

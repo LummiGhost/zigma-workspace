@@ -1,0 +1,13 @@
+{
+  "command": "claude",
+  "args": [
+    "-p",
+    "--dangerously-skip-permissions",
+    "<prompt>"
+  ],
+  "timeout_ms": 600000,
+  "start_time": "2026-07-30T12:43:50.323Z",
+  "end_time": "2026-07-30T12:44:32.224Z",
+  "exit_code": 0,
+  "project_root": "D:\\zigma\\zigma-workspace"
+}
