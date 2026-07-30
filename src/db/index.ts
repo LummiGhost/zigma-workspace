@@ -55,6 +55,18 @@ CREATE TABLE IF NOT EXISTS workspace_events (
   payload TEXT
 );
 
+CREATE TABLE IF NOT EXISTS workspace_artifacts (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL,
+  snapshot_id TEXT,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (workspace_id) REFERENCES workspaces(id),
+  FOREIGN KEY (snapshot_id) REFERENCES workspace_snapshots(id)
+);
+
 CREATE TABLE IF NOT EXISTS workspace_idempotency (
   operation_id TEXT PRIMARY KEY,
   command TEXT NOT NULL,

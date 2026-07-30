@@ -14,7 +14,7 @@ import {
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
 import { lockWorkspace, unlockWorkspace, renewLock, reclaimExpiredLocks, getLock } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
-import { createSnapshot } from "../core/snapshot.js";
+import { createSnapshot, listSnapshots, getArtifact, listWorkspaceArtifacts } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
@@ -571,6 +571,134 @@ program
       }
     }
   );
+
+// ── artifact ────────────────────────────────────────────────────────────────
+
+const artifactCmd = new Command("artifact")
+  .description("Manage workspace artifacts");
+
+artifactCmd
+  .command("list")
+  .description("List artifacts for a workspace or snapshot")
+  .option("--workspace <id>", "Workspace ID to list artifacts for")
+  .option("--snapshot <id>", "Snapshot ID to list artifacts for")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: { workspace?: string; snapshot?: string; json?: boolean }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+
+        if (!opts.workspace && !opts.snapshot) {
+          outputError(
+            "INVALID_INPUT",
+            "Either --workspace or --snapshot is required",
+            useJson
+          );
+        }
+
+        let artifacts: { id: string; workspaceId: string; snapshotId?: string; kind: string; name: string; content: string; createdAt: string }[];
+
+        if (opts.snapshot) {
+          const snapshots = listSnapshots(db, opts.workspace ?? "");
+          const snap = snapshots.find((s) => s.id === opts.snapshot);
+          if (!snap) {
+            outputError("INVALID_INPUT", `Snapshot ${opts.snapshot} not found`, useJson, { snapshotId: opts.snapshot });
+          }
+          artifacts = snap.artifactIds.map((artId) => {
+            const art = getArtifact(db, artId);
+            return {
+              id: art.id,
+              workspaceId: art.workspaceId,
+              snapshotId: art.snapshotId,
+              kind: art.kind,
+              name: art.name,
+              content: art.content,
+              createdAt: art.createdAt,
+            };
+          });
+        } else {
+          artifacts = listWorkspaceArtifacts(db, opts.workspace!);
+        }
+
+        if (useJson) {
+          outputOk(
+            artifacts.map((a) => ({
+              artifact_id: a.id,
+              workspace_id: a.workspaceId,
+              snapshot_id: a.snapshotId ?? null,
+              kind: a.kind,
+              name: a.name,
+              created_at: a.createdAt,
+            })),
+            true
+          );
+        } else {
+          if (artifacts.length === 0) {
+            console.log("No artifacts found.");
+            return;
+          }
+          console.log(`Found ${artifacts.length} artifact(s):\n`);
+          for (const a of artifacts) {
+            console.log(`id:        ${a.id}`);
+            console.log(`workspace: ${a.workspaceId}`);
+            if (a.snapshotId) console.log(`snapshot:  ${a.snapshotId}`);
+            console.log(`kind:      ${a.kind}`);
+            console.log(`name:      ${a.name}`);
+            console.log(`created:   ${a.createdAt}`);
+            console.log("─".repeat(60));
+          }
+        }
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+artifactCmd
+  .command("show")
+  .description("Show artifact content")
+  .requiredOption("--id <id>", "Artifact ID")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: { id: string; json?: boolean }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+        const artifact = getArtifact(db, opts.id);
+
+        if (useJson) {
+          outputOk(
+            {
+              artifact_id: artifact.id,
+              workspace_id: artifact.workspaceId,
+              snapshot_id: artifact.snapshotId ?? null,
+              kind: artifact.kind,
+              name: artifact.name,
+              content: artifact.content,
+              created_at: artifact.createdAt,
+            },
+            true
+          );
+        } else {
+          console.log(`Artifact: ${artifact.id}`);
+          console.log(`Workspace: ${artifact.workspaceId}`);
+          if (artifact.snapshotId) console.log(`Snapshot:  ${artifact.snapshotId}`);
+          console.log(`Kind:      ${artifact.kind}`);
+          console.log(`Name:      ${artifact.name}`);
+          console.log(`Created:   ${artifact.createdAt}`);
+          console.log(`\n─── Content ───`);
+          console.log(artifact.content);
+        }
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+program.addCommand(artifactCmd);
 
 // ── cleanup ──────────────────────────────────────────────────────────────────
 

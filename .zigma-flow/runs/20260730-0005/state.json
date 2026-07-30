@@ -3,7 +3,7 @@
   "workflow": "issue5-lease-lock-management",
   "task": "Implement GitHub Issue #5: feat: implement Lease-based Lock Management\n\n## Background\nAgent execution requires reliable workspace locking. A crashed Agent should not permanently lock a workspace.\n\n## Requirement\nReplace simple locks with lease-based locking.\n\nExample lease shape:\n```json\n{\n  \"owner\": \"agent-id\",\n  \"createdAt\": \"\",\n  \"expiresAt\": \"\",\n  \"lastHeartbeat\": \"\"\n}\n```\n\nRequirements:\n- Support lock heartbeat renewal\n- Automatically reclaim expired leases\n- Preserve lock history through events\n\n## Implementation tasks\n1. Update the `workspace_locks` table schema in `src/db/index.ts` to add `expires_at` and `last_heartbeat` columns (keep `owner`, `created_at`).\n2. Update the Lock TypeScript interface in `src/types/index.ts` to add `expiresAt: string` and `lastHeartbeat: string` fields.\n3. Add `renewLock(lockId, ttlMs)` function in `src/db/queries.ts` that updates `last_heartbeat` and `expires_at`.\n4. Add `reclaimExpiredLocks(workspaceId)` function in `src/db/queries.ts` that deletes locks where `expires_at < now`.\n5. Update `src/core/lock.ts` (or workspace.ts) so that:\n   - `acquireLock` sets an initial lease duration (default 5 minutes TTL)\n   - `renewLock` extends the lease\n   - `releaseLock` removes the lock row\n   - Before acquiring a lock, reclaim any expired leases\n6. Emit workspace events for lock_acquired, lock_renewed, lock_released, lock_reclaimed (use the WorkspaceEvent schema if already implemented in src/types/index.ts).\n7. Update CLI commands in `src/cli/` to expose heartbeat/renewal if appropriate.\n\n## Build validation\nAfter implementing: npm run check\n(typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- better-sqlite3 (synchronous API, synchronous transactions)\n- Lock logic currently in src/core/workspace.ts (acquireLock, releaseLock)\n- workspace_locks table: see src/db/index.ts\n- All entity IDs prefixed: lock_\n- See CLAUDE.md for architecture details",
   "created_at": "2026-07-30T12:27:39.345Z",
-  "last_event_id": "evt-025",
+  "last_event_id": "evt-029",
   "jobs": {
     "intake": {
       "status": "completed",
@@ -41,9 +41,10 @@
       "attempt": 1
     },
     "create-pr": {
-      "status": "running",
+      "status": "completed",
       "current_step": "commit-push-pr",
       "attempt": 1
     }
-  }
+  },
+  "status": "completed"
 }

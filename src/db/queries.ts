@@ -4,6 +4,7 @@ import type {
   RepositoryCacheRow,
   WorkspaceLockRow,
   WorkspaceSnapshotRow,
+  WorkspaceArtifactRow,
   WorkspaceEventRow,
 } from "../types/index.js";
 
@@ -217,6 +218,51 @@ export function updateIdempotencyResult(
   db.prepare(
     "UPDATE workspace_idempotency SET result_json = ? WHERE operation_id = ?"
   ).run(resultJson, operationId);
+}
+
+// ── Workspace Artifacts ──────────────────────────────────────────────────────
+
+export function insertArtifact(
+  db: Database.Database,
+  row: WorkspaceArtifactRow
+): void {
+  db.prepare(`
+    INSERT INTO workspace_artifacts
+      (id, workspace_id, snapshot_id, kind, name, content, created_at)
+    VALUES
+      (@id, @workspace_id, @snapshot_id, @kind, @name, @content, @created_at)
+  `).run(row);
+}
+
+export function getArtifactById(
+  db: Database.Database,
+  id: string
+): WorkspaceArtifactRow | undefined {
+  return db
+    .prepare("SELECT * FROM workspace_artifacts WHERE id = ?")
+    .get(id) as WorkspaceArtifactRow | undefined;
+}
+
+export function listArtifactsByWorkspace(
+  db: Database.Database,
+  workspaceId: string
+): WorkspaceArtifactRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM workspace_artifacts WHERE workspace_id = ? ORDER BY created_at DESC"
+    )
+    .all(workspaceId) as WorkspaceArtifactRow[];
+}
+
+export function listArtifactsBySnapshot(
+  db: Database.Database,
+  snapshotId: string
+): WorkspaceArtifactRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM workspace_artifacts WHERE snapshot_id = ? ORDER BY created_at DESC"
+    )
+    .all(snapshotId) as WorkspaceArtifactRow[];
 }
 
 // ── Workspace Events ────────────────────────────────────────────────────────

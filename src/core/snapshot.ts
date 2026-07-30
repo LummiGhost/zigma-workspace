@@ -3,12 +3,16 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
-import type { WorkspaceSnapshot, ZigmaWorkspaceConfig } from "../types/index.js";
+import type { WorkspaceSnapshot, Artifact, ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceSnapshot,
+  insertArtifact,
+  getArtifactById,
   listSnapshotsForWorkspace,
+  listArtifactsByWorkspace,
+  listArtifactsBySnapshot,
 } from "../db/queries.js";
 import { WorkspaceEventType } from "../types/index.js";
 import { emitWorkspaceEvent } from "./events.js";
@@ -39,7 +43,6 @@ export function createSnapshot(
 
   const headCommit = getHeadCommit(row.path);
 
-  // Collect metadata snapshot
   const metadata = {
     snapshot_id: snapId,
     workspace_id: workspaceId,
@@ -57,7 +60,22 @@ export function createSnapshot(
   const metadataPath = path.join(snapshotDir, `${snapId}.metadata.json`);
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
 
-  // Collect diff snapshot
+  const artifactIds: string[] = [];
+
+  // Store metadata as an Artifact
+  const metadataArtifactId = `art_${uuidv4()}`;
+  insertArtifact(db, {
+    id: metadataArtifactId,
+    workspace_id: workspaceId,
+    snapshot_id: snapId,
+    kind: "file",
+    name: `${snapId}.metadata.json`,
+    content: JSON.stringify(metadata, null, 2),
+    created_at: ts,
+  });
+  artifactIds.push(metadataArtifactId);
+
+  // Collect and store diff as an Artifact
   let patchPath: string | undefined;
   let checksum: string | undefined;
   let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
@@ -69,6 +87,18 @@ export function createSnapshot(
       fs.writeFileSync(patchPath, patch, "utf-8");
       checksum = sha256(patch);
       snapshotKind = "diff";
+
+      const diffArtifactId = `art_${uuidv4()}`;
+      insertArtifact(db, {
+        id: diffArtifactId,
+        workspace_id: workspaceId,
+        snapshot_id: snapId,
+        kind: "diff",
+        name: `${snapId}.patch`,
+        content: patch,
+        created_at: ts,
+      });
+      artifactIds.push(diffArtifactId);
     }
   }
 
@@ -88,6 +118,7 @@ export function createSnapshot(
     kind: snapshotKind,
     patchPath,
     checksum,
+    artifactIds,
   });
 
   return {
@@ -96,6 +127,7 @@ export function createSnapshot(
     kind: snapshotKind,
     path: patchPath ?? metadataPath,
     checksum,
+    artifactIds,
     createdAt: ts,
   };
 }
@@ -105,12 +137,67 @@ export function listSnapshots(
   workspaceId: string
 ): WorkspaceSnapshot[] {
   const rows = listSnapshotsForWorkspace(db, workspaceId);
+  return rows.map((r) => {
+    const artifacts = listArtifactsBySnapshot(db, r.id);
+    return {
+      id: r.id,
+      workspaceId: r.workspace_id,
+      kind: r.kind as WorkspaceSnapshot["kind"],
+      path: r.path ?? undefined,
+      checksum: r.checksum ?? undefined,
+      artifactIds: artifacts.map((a) => a.id),
+      createdAt: r.created_at,
+    };
+  });
+}
+
+export function getSnapshotArtifacts(
+  db: Database.Database,
+  snapshotId: string
+): Artifact[] {
+  const rows = listArtifactsBySnapshot(db, snapshotId);
   return rows.map((r) => ({
     id: r.id,
     workspaceId: r.workspace_id,
-    kind: r.kind as WorkspaceSnapshot["kind"],
-    path: r.path ?? undefined,
-    checksum: r.checksum ?? undefined,
+    snapshotId: r.snapshot_id ?? undefined,
+    kind: r.kind as Artifact["kind"],
+    name: r.name,
+    content: r.content,
+    createdAt: r.created_at,
+  }));
+}
+
+export function getArtifact(
+  db: Database.Database,
+  artifactId: string
+): Artifact {
+  const row = getArtifactById(db, artifactId);
+  if (!row) {
+    throw new ZigmaError("INVALID_INPUT", `Artifact ${artifactId} not found`, { artifactId });
+  }
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    snapshotId: row.snapshot_id ?? undefined,
+    kind: row.kind as Artifact["kind"],
+    name: row.name,
+    content: row.content,
+    createdAt: row.created_at,
+  };
+}
+
+export function listWorkspaceArtifacts(
+  db: Database.Database,
+  workspaceId: string
+): Artifact[] {
+  const rows = listArtifactsByWorkspace(db, workspaceId);
+  return rows.map((r) => ({
+    id: r.id,
+    workspaceId: r.workspace_id,
+    snapshotId: r.snapshot_id ?? undefined,
+    kind: r.kind as Artifact["kind"],
+    name: r.name,
+    content: r.content,
     createdAt: r.created_at,
   }));
 }

@@ -1,0 +1,61 @@
+{
+  "run_id": "20260730-0006",
+  "workflow": "issue6-snapshot-artifact-models",
+  "task": "Implement GitHub Issue #6: refactor: separate Snapshot and Artifact models\n\n## Background\nSnapshot currently contains diff artifacts. In Zigma architecture, Artifact should be an independent first-class object.\n\n## Requirement\nRefactor models so that:\n\n```\nSnapshot\n ├── metadata\n ├── git state\n └── artifact references\n\nArtifact\n ├── diff\n ├── logs\n ├── reports\n └── generated files\n```\n\nThis allows workspace outputs to support test reports, screenshots, benchmarks, logs and other execution results.\n\n## Implementation tasks\n1. Add an `Artifact` TypeScript interface to `src/types/index.ts`:\n   ```typescript\n   interface Artifact {\n     id: string;          // art_<uuid>\n     workspaceId: string;\n     snapshotId?: string; // optional reference to parent snapshot\n     kind: \"diff\" | \"log\" | \"report\" | \"file\";\n     name: string;\n     content: string;     // raw text or base64\n     createdAt: string;\n   }\n   ```\n2. Update the `Snapshot` interface in `src/types/index.ts` to remove embedded diff fields and add `artifactIds: string[]`.\n3. Add a `workspace_artifacts` table in `src/db/index.ts` with columns: `id`, `workspace_id`, `snapshot_id` (nullable FK), `kind`, `name`, `content`, `created_at`.\n4. Add CRUD functions for artifacts in `src/db/queries.ts`: `insertArtifact`, `getArtifactById`, `listArtifactsByWorkspace`, `listArtifactsBySnapshot`.\n5. Update `src/core/snapshot.ts` (or wherever snapshots are created) so that diff content is stored as an Artifact row instead of inline on the Snapshot.\n6. Update `src/cli/` to add an `artifact` command (or subcommands) to list/show artifacts, with `--json` support.\n\n## Build validation\nAfter implementing: npm run check\n(typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- better-sqlite3 (synchronous API)\n- Snapshot logic in src/core/snapshot.ts, types in src/types/index.ts\n- DB schema in src/db/index.ts, queries in src/db/queries.ts\n- All entity IDs prefixed (ws_, snap_, evt_, etc.) — use art_ for artifacts\n- See CLAUDE.md for architecture details",
+  "created_at": "2026-07-30T12:32:02.106Z",
+  "last_event_id": "evt-025",
+  "jobs": {
+    "intake": {
+      "status": "completed",
+      "attempt": 1,
+      "attempts": [
+        {
+          "number": 1,
+          "started_at": "2026-07-30T12:32:02.110Z",
+          "step_count": 1,
+          "status": "success",
+          "ended_at": "2026-07-30T12:33:01.962Z"
+        }
+      ],
+      "outputs": {
+        "task_summary": "Refactor Snapshot and Artifact models to make Artifact an independent first-class entity. Currently diff content is embedded inline in snapshots; after this change, Artifact will be a separate table/model referenced by Snapshot via artifactIds. The refactoring adds a new Artifact TypeScript interface (art_<uuid> prefixed), a workspace_artifacts SQLite table, CRUD query functions, updates createSnapshot to store diffs as Artifact rows, and adds an `artifact` CLI command with list/show subcommands and --json support.",
+        "scope": "medium",
+        "complexity_profile": {
+          "type_system": "low",
+          "database_schema": "low",
+          "business_logic": "medium",
+          "cli": "low",
+          "backward_compatibility": "medium"
+        }
+      }
+    },
+    "implement": {
+      "status": "completed",
+      "current_step": "collect-diff",
+      "attempt": 1,
+      "outputs": {
+        "files_changed": [
+          "src/types/index.ts",
+          "src/db/index.ts",
+          "src/db/queries.ts",
+          "src/core/snapshot.ts",
+          "src/cli/index.ts"
+        ],
+        "summary": "Implemented Issue #6: refactored Snapshot and Artifact models to make Artifact an independent first-class entity. Added Artifact interface and ArtifactRow type, workspace_artifacts database table, CRUD queries (insertArtifact, getArtifactById, listArtifactsByWorkspace, listArtifactsBySnapshot), updated snapshot creation to store metadata and diff content as Artifact rows, and added CLI artifact command with list and show subcommands supporting --json output. Build validated with npm run check (typecheck + build + smoke test all pass)."
+      },
+      "step_visits": {
+        "collect-diff": 1
+      }
+    },
+    "validate": {
+      "status": "completed",
+      "current_step": "check",
+      "attempt": 1
+    },
+    "create-pr": {
+      "status": "running",
+      "current_step": "commit-push-pr",
+      "attempt": 1
+    }
+  }
+}

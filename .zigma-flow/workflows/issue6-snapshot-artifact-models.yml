@@ -1,0 +1,77 @@
+name: issue6-snapshot-artifact-models
+version: 1.0.0
+description: >
+  Implement GitHub Issue #6: refactor: separate Snapshot and Artifact models.
+  Artifact becomes an independent first-class object referenced by Snapshot,
+  allowing workspace outputs to support diffs, logs, reports, and generated files.
+
+on:
+  manual:
+
+inputs:
+  task:
+    type: string
+    required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+jobs:
+  intake:
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - intake
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        failure_policy: fail
+
+  validate:
+    needs:
+      - implement
+    steps:
+      - id: check
+        type: script
+        run: "npm run check"
+        timeout: "2m"
+        failure_policy: fail
+
+  create-pr:
+    needs:
+      - validate
+    steps:
+      - id: commit-push-pr
+        type: script
+        run: "git checkout -b refactor/issue-6-snapshot-artifact-models && git add -A && git commit -m \"refactor: separate Snapshot and Artifact models (closes #6)\" && git push -u origin refactor/issue-6-snapshot-artifact-models && gh pr create --title \"refactor: separate Snapshot and Artifact models\" --body \"Closes #6\" --head refactor/issue-6-snapshot-artifact-models"
+        failure_policy: fail

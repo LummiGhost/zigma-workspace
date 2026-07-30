@@ -58,6 +58,17 @@ export interface WorkspaceSnapshot {
   kind: "manifest" | "diff" | "archive" | "metadata-only";
   path?: string;
   checksum?: string;
+  artifactIds: string[];
+  createdAt: string;
+}
+
+export interface Artifact {
+  id: string;
+  workspaceId: string;
+  snapshotId?: string;
+  kind: "diff" | "log" | "report" | "file";
+  name: string;
+  content: string;
   createdAt: string;
 }
 
@@ -142,6 +153,16 @@ export interface WorkspaceSnapshotRow {
   kind: string;
   path: string | null;
   checksum: string | null;
+  created_at: string;
+}
+
+export interface WorkspaceArtifactRow {
+  id: string;
+  workspace_id: string;
+  snapshot_id: string | null;
+  kind: string;
+  name: string;
+  content: string;
   created_at: string;
 }
 
