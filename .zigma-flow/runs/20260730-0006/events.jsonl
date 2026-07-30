@@ -23,3 +23,7 @@
 {"id":"evt-023","run_id":"20260730-0006","type":"job_completed","timestamp":"2026-07-30T12:35:25.644Z","producer":"engine","job":"validate","step":null,"attempt":1,"payload":{"job_id":"validate","attempt":1}}
 {"id":"evt-024","run_id":"20260730-0006","type":"job_ready","timestamp":"2026-07-30T12:35:25.644Z","producer":"engine","job":null,"step":null,"attempt":null,"payload":{"job_id":"create-pr"}}
 {"id":"evt-025","run_id":"20260730-0006","type":"step_started","timestamp":"2026-07-30T12:35:25.660Z","producer":"engine","job":"create-pr","step":"commit-push-pr","attempt":1,"payload":{"job_id":"create-pr","step_id":"commit-push-pr","attempt":1}}
+{"id":"evt-026","run_id":"20260730-0006","type":"script_completed","timestamp":"2026-07-30T12:35:33.734Z","producer":"engine","job":"create-pr","step":"commit-push-pr","attempt":1,"payload":{"job_id":"create-pr","step_id":"commit-push-pr","exit_code":0,"timed_out":false}}
+{"id":"evt-027","run_id":"20260730-0006","type":"step_completed","timestamp":"2026-07-30T12:35:33.734Z","producer":"engine","job":"create-pr","step":"commit-push-pr","attempt":1,"payload":{"job_id":"create-pr","step_id":"commit-push-pr","attempt":1}}
+{"id":"evt-028","run_id":"20260730-0006","type":"job_completed","timestamp":"2026-07-30T12:35:33.734Z","producer":"engine","job":"create-pr","step":null,"attempt":1,"payload":{"job_id":"create-pr","attempt":1}}
+{"id":"evt-029","run_id":"20260730-0006","type":"run_completed","timestamp":"2026-07-30T12:35:33.734Z","producer":"engine","job":null,"step":null,"attempt":null,"payload":{}}

@@ -1,0 +1,8 @@
+{
+  "exit_code": 0,
+  "timed_out": false,
+  "stdout": "artifact://20260730-0007/jobs/validate/attempts/1/steps/check/stdout",
+  "stderr": "artifact://20260730-0007/jobs/validate/attempts/1/steps/check/stderr",
+  "started_at": "2026-07-30T12:42:21.601Z",
+  "ended_at": "2026-07-30T12:42:25.370Z"
+}

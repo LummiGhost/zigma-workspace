@@ -84,6 +84,10 @@ function formatWorkspace(ws: Workspace): string {
     `repo:    ${ws.repositoryUrl}`,
     ws.taskId ? `task:    ${ws.taskId}` : null,
     ws.flowRunId ? `flow:    ${ws.flowRunId}` : null,
+    ws.workflowRunId ? `wf-run:  ${ws.workflowRunId}` : null,
+    ws.jobId ? `job:     ${ws.jobId}` : null,
+    ws.stepId ? `step:    ${ws.stepId}` : null,
+    ws.agentId ? `agent:   ${ws.agentId}` : null,
     `created: ${ws.createdAt}`,
   ]
     .filter(Boolean)
@@ -198,6 +202,10 @@ program
   .option("--project <projectId>", "Project ID to associate")
   .option("--task <taskId>", "Task ID to associate")
   .option("--flow-run <flowRunId>", "Flow run ID to associate")
+  .option("--workflow-run-id <id>", "Workflow run ID for execution context")
+  .option("--job-id <id>", "Job ID for execution context")
+  .option("--step-id <id>", "Step ID for execution context")
+  .option("--agent-id <id>", "Agent ID for execution context")
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
@@ -209,6 +217,10 @@ program
       project?: string;
       task?: string;
       flowRun?: string;
+      workflowRunId?: string;
+      jobId?: string;
+      stepId?: string;
+      agentId?: string;
       operationId?: string;
       json?: boolean;
     }) => {
@@ -233,6 +245,10 @@ program
           project: opts.project ?? null,
           task: opts.task ?? null,
           flowRun: opts.flowRun ?? null,
+          workflowRunId: opts.workflowRunId ?? null,
+          jobId: opts.jobId ?? null,
+          stepId: opts.stepId ?? null,
+          agentId: opts.agentId ?? null,
         };
 
         if (opts.operationId) {
@@ -263,6 +279,10 @@ program
           projectId: opts.project,
           taskId: opts.task,
           flowRunId: opts.flowRun,
+          workflowRunId: opts.workflowRunId,
+          jobId: opts.jobId,
+          stepId: opts.stepId,
+          agentId: opts.agentId,
         });
 
         const data = {
@@ -404,6 +424,10 @@ program
             task_id: workspace.taskId ?? null,
             flow_run_id: workspace.flowRunId ?? null,
             project_id: workspace.projectId ?? null,
+            workflow_run_id: workspace.workflowRunId ?? null,
+            job_id: workspace.jobId ?? null,
+            step_id: workspace.stepId ?? null,
+            agent_id: workspace.agentId ?? null,
             created_at: workspace.createdAt,
             updated_at: workspace.updatedAt,
             lock: lock
@@ -791,6 +815,10 @@ program
             task_id: ws.taskId ?? null,
             flow_run_id: ws.flowRunId ?? null,
             project_id: ws.projectId ?? null,
+            workflow_run_id: ws.workflowRunId ?? null,
+            job_id: ws.jobId ?? null,
+            step_id: ws.stepId ?? null,
+            agent_id: ws.agentId ?? null,
             created_at: ws.createdAt,
             updated_at: ws.updatedAt,
           })),

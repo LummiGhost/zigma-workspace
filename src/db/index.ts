@@ -116,6 +116,20 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
     );
   }
 
+  // Migrate workspaces: add execution context columns
+  const wsColInfo = db.pragma("table_info(workspaces)") as { name: string }[];
+  const execCtxCols = [
+    { name: "workflow_run_id", sql: "ALTER TABLE workspaces ADD COLUMN workflow_run_id TEXT" },
+    { name: "job_id", sql: "ALTER TABLE workspaces ADD COLUMN job_id TEXT" },
+    { name: "step_id", sql: "ALTER TABLE workspaces ADD COLUMN step_id TEXT" },
+    { name: "agent_id", sql: "ALTER TABLE workspaces ADD COLUMN agent_id TEXT" },
+  ];
+  for (const col of execCtxCols) {
+    if (!wsColInfo.some((c) => c.name === col.name)) {
+      db.exec(col.sql);
+    }
+  }
+
   _dbMap.set(config.dbPath, db);
   return db;
 }

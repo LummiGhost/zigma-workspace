@@ -1,0 +1,17 @@
+{
+  "outputs": {
+    "task_summary": "Add 4 optional workflow execution context fields (workflowRunId, jobId, stepId, agentId) to the Workspace entity end-to-end: TypeScript interfaces, DB schema, queries, core creation logic, manifest file, and CLI create/status commands. Follows the existing pattern established by projectId/taskId/flowRunId. Purely additive — no breaking changes, no new business logic.",
+    "scope": "medium",
+    "complexity_profile": {
+      "files_touched": 5,
+      "layers": ["types", "db", "core", "cli"],
+      "new_columns": 4,
+      "risk": "low",
+      "pattern": "replicates existing optional-field wiring (projectId/taskId/flowRunId precedent)",
+      "breaking_changes": false
+    }
+  },
+  "artifacts": [],
+  "signals": [],
+  "summary": "Intake analysis of GitHub Issue #4: bind Workspace to Workflow Execution Context. Estimated scope: medium. Touches 5 files (types → DB → queries → core → CLI) adding 4 optional TEXT NULL columns and their corresponding TypeScript/CLI fields. All additive, following the proven projectId/taskId/flowRunId pattern. No blocking issues. Knowledge files (coding-guidelines.md, workflow-guide.md, common-failure-patterns.md) not found at expected paths under .zigma-flow/knowledge/ — intake prompt and codebase audit provided sufficient guidance."
+}

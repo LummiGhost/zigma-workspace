@@ -1,0 +1,67 @@
+{
+  "run_id": "20260730-0007",
+  "workflow": "issue4-workspace-execution-context",
+  "task": "Implement GitHub Issue #4: feat: bind Workspace to Workflow Execution Context\n\n## Background\nZigma requires traceability between Workflow Run, Job, Step, Agent and Workspace.\nWithout this association, it is difficult to identify which execution unit produced a code change.\n\n## Requirement\nExtend workspace metadata and the .zigma-workspace.json manifest with execution context fields:\n\n```json\n{\n  \"workspaceId\": \"\",\n  \"workflowRunId\": \"\",\n  \"jobId\": \"\",\n  \"stepId\": \"\",\n  \"agentId\": \"\"\n}\n```\n\n## Implementation tasks\n1. Update the `Workspace` TypeScript interface in `src/types/index.ts` to add optional execution context fields:\n   ```typescript\n   workflowRunId?: string;\n   jobId?: string;\n   stepId?: string;\n   agentId?: string;\n   ```\n2. Add corresponding nullable columns to the `workspaces` table in `src/db/index.ts`: `workflow_run_id`, `job_id`, `step_id`, `agent_id` (all TEXT NULL).\n3. Update `insertWorkspace` and `getWorkspace` in `src/db/queries.ts` to read/write these fields.\n4. Update `src/core/workspace.ts` `createWorkspace` to accept and persist these optional context fields.\n5. Update the `.zigma-workspace.json` manifest written to the worktree root (in `src/core/workspace.ts`) to include these fields when present.\n6. Update CLI `zigma-workspace create` command in `src/cli/` to accept optional flags: `--workflow-run-id`, `--job-id`, `--step-id`, `--agent-id`.\n7. Ensure `zigma-workspace info` (or equivalent inspect command) displays these fields when set.\n\n## Build validation\nAfter implementing: npm run check\n(typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- better-sqlite3 (synchronous API)\n- Workspace creation in src/core/workspace.ts\n- DB schema in src/db/index.ts, queries in src/db/queries.ts\n- CLI commands in src/cli/index.ts\n- Manifest (.zigma-workspace.json) written during workspace creation\n- See CLAUDE.md for architecture details",
+  "created_at": "2026-07-30T12:36:20.836Z",
+  "last_event_id": "evt-034",
+  "jobs": {
+    "intake": {
+      "status": "completed",
+      "attempt": 1,
+      "attempts": [
+        {
+          "number": 1,
+          "started_at": "2026-07-30T12:36:20.841Z",
+          "step_count": 1,
+          "status": "success",
+          "ended_at": "2026-07-30T12:40:03.769Z"
+        }
+      ],
+      "outputs": {
+        "task_summary": "Add 4 optional workflow execution context fields (workflowRunId, jobId, stepId, agentId) to the Workspace entity end-to-end: TypeScript interfaces, DB schema, queries, core creation logic, manifest file, and CLI create/status commands. Follows the existing pattern established by projectId/taskId/flowRunId. Purely additive — no breaking changes, no new business logic.",
+        "scope": "medium",
+        "complexity_profile": {
+          "files_touched": 5,
+          "layers": [
+            "types",
+            "db",
+            "core",
+            "cli"
+          ],
+          "new_columns": 4,
+          "risk": "low",
+          "pattern": "replicates existing optional-field wiring (projectId/taskId/flowRunId precedent)",
+          "breaking_changes": false
+        }
+      }
+    },
+    "implement": {
+      "status": "completed",
+      "current_step": "collect-diff",
+      "attempt": 1,
+      "outputs": {
+        "files_changed": [
+          "src/types/index.ts",
+          "src/db/index.ts",
+          "src/db/queries.ts",
+          "src/core/workspace.ts",
+          "src/cli/index.ts"
+        ],
+        "summary": "Added workflowRunId, jobId, stepId, agentId optional execution context fields to Workspace entity across all layers: types (Workspace, WorkspaceRow, CreateWorkspaceInput, WorkspaceManifest), DB schema (4 new TEXT NULL columns with migration), queries (insertWorkspace), core (rowToWorkspace mapping, createWorkspace row/manifest), and CLI (--workflow-run-id, --job-id, --step-id, --agent-id create flags, formatWorkspace display, status/list JSON output). Typecheck, build, and smoke test all pass."
+      },
+      "step_visits": {
+        "collect-diff": 1
+      }
+    },
+    "validate": {
+      "status": "completed",
+      "current_step": "check",
+      "attempt": 1
+    },
+    "create-pr": {
+      "status": "running",
+      "current_step": "commit-push-pr",
+      "attempt": 1
+    }
+  }
+}
