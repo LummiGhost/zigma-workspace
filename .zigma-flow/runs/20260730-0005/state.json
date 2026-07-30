@@ -1,0 +1,49 @@
+{
+  "run_id": "20260730-0005",
+  "workflow": "issue5-lease-lock-management",
+  "task": "Implement GitHub Issue #5: feat: implement Lease-based Lock Management\n\n## Background\nAgent execution requires reliable workspace locking. A crashed Agent should not permanently lock a workspace.\n\n## Requirement\nReplace simple locks with lease-based locking.\n\nExample lease shape:\n```json\n{\n  \"owner\": \"agent-id\",\n  \"createdAt\": \"\",\n  \"expiresAt\": \"\",\n  \"lastHeartbeat\": \"\"\n}\n```\n\nRequirements:\n- Support lock heartbeat renewal\n- Automatically reclaim expired leases\n- Preserve lock history through events\n\n## Implementation tasks\n1. Update the `workspace_locks` table schema in `src/db/index.ts` to add `expires_at` and `last_heartbeat` columns (keep `owner`, `created_at`).\n2. Update the Lock TypeScript interface in `src/types/index.ts` to add `expiresAt: string` and `lastHeartbeat: string` fields.\n3. Add `renewLock(lockId, ttlMs)` function in `src/db/queries.ts` that updates `last_heartbeat` and `expires_at`.\n4. Add `reclaimExpiredLocks(workspaceId)` function in `src/db/queries.ts` that deletes locks where `expires_at < now`.\n5. Update `src/core/lock.ts` (or workspace.ts) so that:\n   - `acquireLock` sets an initial lease duration (default 5 minutes TTL)\n   - `renewLock` extends the lease\n   - `releaseLock` removes the lock row\n   - Before acquiring a lock, reclaim any expired leases\n6. Emit workspace events for lock_acquired, lock_renewed, lock_released, lock_reclaimed (use the WorkspaceEvent schema if already implemented in src/types/index.ts).\n7. Update CLI commands in `src/cli/` to expose heartbeat/renewal if appropriate.\n\n## Build validation\nAfter implementing: npm run check\n(typecheck + build + smoke test)\n\n## Codebase notes\n- Source in src/, built to dist/ with tsc\n- better-sqlite3 (synchronous API, synchronous transactions)\n- Lock logic currently in src/core/workspace.ts (acquireLock, releaseLock)\n- workspace_locks table: see src/db/index.ts\n- All entity IDs prefixed: lock_\n- See CLAUDE.md for architecture details",
+  "created_at": "2026-07-30T12:27:39.345Z",
+  "last_event_id": "evt-025",
+  "jobs": {
+    "intake": {
+      "status": "completed",
+      "attempt": 1,
+      "attempts": [
+        {
+          "number": 1,
+          "started_at": "2026-07-30T12:27:39.349Z",
+          "step_count": 1,
+          "status": "success",
+          "ended_at": "2026-07-30T12:28:15.388Z"
+        }
+      ],
+      "outputs": {
+        "task_summary": "Replace simple workspace locks with lease-based locking: add expires_at and last_heartbeat columns to workspace_locks table, update the Lock interface, implement renewLock and reclaimExpiredLocks queries, update acquireLock to set a default 5-minute TTL with auto-reclamation of expired leases, emit workspace events (lock_acquired, lock_renewed, lock_released, lock_reclaimed), and expose lock renewal via CLI.",
+        "scope": "medium",
+        "complexity_profile": "medium"
+      }
+    },
+    "implement": {
+      "status": "completed",
+      "current_step": "collect-diff",
+      "attempt": 1,
+      "outputs": {
+        "files_changed": "src/types/index.ts, src/db/index.ts, src/db/queries.ts, src/core/lock.ts, src/cli/index.ts",
+        "summary": "Implemented lease-based lock management: added last_heartbeat column, auto-TTL on acquire (default 5 min), lock renewal via heartbeat, expired lock reclamation, new event types (lock_renewed, lock_reclaimed), and renew CLI command. Build passes typecheck + smoke test."
+      },
+      "step_visits": {
+        "collect-diff": 1
+      }
+    },
+    "validate": {
+      "status": "completed",
+      "current_step": "check",
+      "attempt": 1
+    },
+    "create-pr": {
+      "status": "running",
+      "current_step": "commit-push-pr",
+      "attempt": 1
+    }
+  }
+}

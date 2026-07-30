@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS workspace_locks (
   mode TEXT NOT NULL,
   owner TEXT NOT NULL,
   expires_at TEXT,
+  last_heartbeat TEXT,
   acquired_at TEXT NOT NULL
 );
 
@@ -89,6 +90,17 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   if (!hasActorCol) {
     db.exec(
       "ALTER TABLE workspace_events ADD COLUMN actor TEXT NOT NULL DEFAULT 'system'"
+    );
+  }
+
+  // Migrate workspace_locks: add last_heartbeat column
+  const lockColInfo = db.pragma("table_info(workspace_locks)") as {
+    name: string;
+  }[];
+  const hasLastHeartbeat = lockColInfo.some((c) => c.name === "last_heartbeat");
+  if (!hasLastHeartbeat) {
+    db.exec(
+      "ALTER TABLE workspace_locks ADD COLUMN last_heartbeat TEXT"
     );
   }
 

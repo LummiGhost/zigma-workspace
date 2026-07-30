@@ -101,9 +101,9 @@ export function insertWorkspaceLock(
 ): void {
   db.prepare(`
     INSERT INTO workspace_locks
-      (id, workspace_id, mode, owner, expires_at, acquired_at)
+      (id, workspace_id, mode, owner, expires_at, last_heartbeat, acquired_at)
     VALUES
-      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at)
+      (@id, @workspace_id, @mode, @owner, @expires_at, @last_heartbeat, @acquired_at)
   `).run(row);
 }
 
@@ -121,6 +121,36 @@ export function deleteLockForWorkspace(
   workspaceId: string
 ): void {
   db.prepare("DELETE FROM workspace_locks WHERE workspace_id = ?").run(workspaceId);
+}
+
+export function getLockById(
+  db: Database.Database,
+  lockId: string
+): WorkspaceLockRow | undefined {
+  return db
+    .prepare("SELECT * FROM workspace_locks WHERE id = ?")
+    .get(lockId) as WorkspaceLockRow | undefined;
+}
+
+export function renewLock(
+  db: Database.Database,
+  lockId: string,
+  lastHeartbeat: string,
+  expiresAt: string
+): void {
+  db.prepare(
+    "UPDATE workspace_locks SET last_heartbeat = ?, expires_at = ? WHERE id = ?"
+  ).run(lastHeartbeat, expiresAt, lockId);
+}
+
+export function reclaimExpiredLocks(
+  db: Database.Database,
+  now: string
+): number {
+  const result = db.prepare(
+    "DELETE FROM workspace_locks WHERE expires_at IS NOT NULL AND expires_at < ?"
+  ).run(now);
+  return result.changes as number;
 }
 
 // ── Workspace Snapshots ─────────────────────────────────────────────────────

@@ -1,0 +1,47 @@
+
+> @zigma-ai/zigma-workspace@0.1.0 check
+> npm run typecheck && npm run build && npm run test
+
+
+> @zigma-ai/zigma-workspace@0.1.0 typecheck
+> tsc --noEmit
+
+
+> @zigma-ai/zigma-workspace@0.1.0 build
+> npm run clean && tsc
+
+
+> @zigma-ai/zigma-workspace@0.1.0 clean
+> node -e "require('node:fs').rmSync('dist', { recursive: true, force: true })"
+
+
+> @zigma-ai/zigma-workspace@0.1.0 test
+> npm run test:smoke
+
+
+> @zigma-ai/zigma-workspace@0.1.0 test:smoke
+> node dist/cli/index.js --help
+
+Usage: zigma-workspace [options] [command]
+
+Zigma workspace management CLI
+
+Options:
+  -V, --version       output the version number
+  --state-dir <path>  Override state directory with an absolute path (or set
+                      ZIGMA_WORKSPACE_STATE_DIR)
+  -h, --help          display help for command
+
+Commands:
+  create [options]    Create a new workspace from a git repository
+  bind-run [options]  Bind a workspace to a task or flow run
+  status [options]    Show workspace status
+  diff [options]      Collect workspace diff and generate patch
+  snapshot [options]  Create a snapshot of the workspace state
+  cleanup [options]   Clean up a workspace (remove worktree and mark as
+                      cleaned)
+  list [options]      List all workspaces
+  lock [options]      Acquire a lock on a workspace
+  unlock [options]    Release the lock on a workspace
+  renew [options]     Renew a workspace lock lease (heartbeat)
+  help [command]      display help for command

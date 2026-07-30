@@ -1,0 +1,10 @@
+{
+  "outputs": {
+    "task_summary": "Replace simple workspace locks with lease-based locking: add expires_at and last_heartbeat columns to workspace_locks table, update the Lock interface, implement renewLock and reclaimExpiredLocks queries, update acquireLock to set a default 5-minute TTL with auto-reclamation of expired leases, emit workspace events (lock_acquired, lock_renewed, lock_released, lock_reclaimed), and expose lock renewal via CLI.",
+    "scope": "medium",
+    "complexity_profile": "medium"
+  },
+  "artifacts": [],
+  "signals": [],
+  "summary": "Intake analysis for GitHub Issue #5: Lease-based Lock Management. The task spans DB schema (2 new columns), types (2 new fields), query layer (2 new functions), core logic (lease lifecycle in acquire/renew/release), event emissions (4 new event types), and CLI updates. Estimated as medium scope — touches 6+ files across all architecture layers but follows established patterns (SQLite via better-sqlite3, GitError wrapping, prefixed IDs). No blocking issues detected."
+}

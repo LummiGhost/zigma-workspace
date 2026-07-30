@@ -6,11 +6,16 @@ import {
   getWorkspaceById,
   insertWorkspaceLock,
   getActiveLockForWorkspace,
+  getLockById,
   deleteLockForWorkspace,
+  renewLock as renewLockQuery,
+  reclaimExpiredLocks as reclaimExpiredLocksQuery,
   updateWorkspaceStatus,
 } from "../db/queries.js";
 import { WorkspaceEventType } from "../types/index.js";
 import { emitWorkspaceEvent } from "./events.js";
+
+const DEFAULT_LOCK_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 function now(): string {
   return new Date().toISOString();
@@ -28,7 +33,13 @@ export function lockWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  // Check for existing lock
+  // Reclaim expired locks before checking for conflicts
+  const reclaimed = reclaimExpiredLocksQuery(db, now());
+  if (reclaimed > 0) {
+    emitWorkspaceEvent(db, workspaceId, WorkspaceEventType.LOCK_RECLAIMED, { reclaimedCount: reclaimed });
+  }
+
+  // Check for existing non-expired lock
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
   if (existingLock) {
     throw new ZigmaError(
@@ -40,25 +51,28 @@ export function lockWorkspace(
 
   const lockId = `lock_${uuidv4()}`;
   const acquiredAt = now();
+  const leaseExpiresAt = expiresAt ?? new Date(Date.now() + DEFAULT_LOCK_TTL_MS).toISOString();
 
   insertWorkspaceLock(db, {
     id: lockId,
     workspace_id: workspaceId,
     mode,
     owner,
-    expires_at: expiresAt ?? null,
+    expires_at: leaseExpiresAt,
+    last_heartbeat: acquiredAt,
     acquired_at: acquiredAt,
   });
 
   updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
-  emitWorkspaceEvent(db, workspaceId, WorkspaceEventType.LOCK_ACQUIRED, { mode }, owner);
+  emitWorkspaceEvent(db, workspaceId, WorkspaceEventType.LOCK_ACQUIRED, { mode, expiresAt: leaseExpiresAt }, owner);
 
   return {
     id: lockId,
     workspaceId,
     mode,
     owner,
-    expiresAt,
+    expiresAt: leaseExpiresAt,
+    lastHeartbeat: acquiredAt,
     acquiredAt,
   };
 }
@@ -93,6 +107,48 @@ export function unlockWorkspace(
   );
 }
 
+export function renewLock(
+  db: Database.Database,
+  lockId: string,
+  ttlMs?: number
+): WorkspaceLock {
+  const ttl = ttlMs ?? DEFAULT_LOCK_TTL_MS;
+  const lockRow = getLockById(db, lockId);
+  if (!lockRow) {
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Lock ${lockId} not found`, { lockId });
+  }
+
+  const heartbeat = now();
+  const newExpiresAt = new Date(Date.now() + ttl).toISOString();
+
+  renewLockQuery(db, lockId, heartbeat, newExpiresAt);
+
+  emitWorkspaceEvent(
+    db,
+    lockRow.workspace_id,
+    WorkspaceEventType.LOCK_RENEWED,
+    { expiresAt: newExpiresAt },
+    lockRow.owner
+  );
+
+  return {
+    id: lockRow.id,
+    workspaceId: lockRow.workspace_id,
+    mode: lockRow.mode as "read" | "write",
+    owner: lockRow.owner,
+    expiresAt: newExpiresAt,
+    lastHeartbeat: heartbeat,
+    acquiredAt: lockRow.acquired_at,
+  };
+}
+
+export function reclaimExpiredLocks(
+  db: Database.Database
+): number {
+  const count = reclaimExpiredLocksQuery(db, now());
+  return count;
+}
+
 export function getLock(
   db: Database.Database,
   workspaceId: string
@@ -105,6 +161,7 @@ export function getLock(
     mode: row.mode as "read" | "write",
     owner: row.owner,
     expiresAt: row.expires_at ?? undefined,
+    lastHeartbeat: row.last_heartbeat ?? undefined,
     acquiredAt: row.acquired_at,
   };
 }

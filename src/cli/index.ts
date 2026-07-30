@@ -12,7 +12,7 @@ import {
   getRepositoryCacheByUrl,
 } from "../db/queries.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
-import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
+import { lockWorkspace, unlockWorkspace, renewLock, reclaimExpiredLocks, getLock } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
@@ -413,6 +413,7 @@ program
                   owner: lock.owner,
                   acquired_at: lock.acquiredAt,
                   expires_at: lock.expiresAt ?? null,
+                  last_heartbeat: lock.lastHeartbeat ?? null,
                 }
               : null,
           },
@@ -424,6 +425,8 @@ program
           console.log(
             `\nLocked by: ${lock.owner} (mode: ${lock.mode}, acquired: ${lock.acquiredAt})`
           );
+          if (lock.expiresAt) console.log(`Expires:   ${lock.expiresAt}`);
+          if (lock.lastHeartbeat) console.log(`Heartbeat: ${lock.lastHeartbeat}`);
         }
       }
     } catch (err) {
@@ -763,6 +766,52 @@ program
           outputOk({ workspace_id: opts.workspace, unlocked: true }, true);
         } else {
           console.log(`Workspace ${opts.workspace} unlocked`);
+        }
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── renew ──────────────────────────────────────────────────────────────────────
+
+program
+  .command("renew")
+  .description("Renew a workspace lock lease (heartbeat)")
+  .requiredOption("--lock <id>", "Lock ID to renew")
+  .option("--ttl <ms>", "TTL in milliseconds (default 300000 = 5 min)")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: { lock: string; ttl?: string; json?: boolean }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+        const ttlMs = opts.ttl ? parseInt(opts.ttl, 10) : undefined;
+        if (opts.ttl && (isNaN(ttlMs!) || ttlMs! <= 0)) {
+          outputError("INVALID_INPUT", `Invalid TTL "${opts.ttl}". Must be a positive number`, useJson);
+        }
+        const lock = renewLock(db, opts.lock, ttlMs);
+
+        if (useJson) {
+          outputOk(
+            {
+              lock_id: lock.id,
+              workspace_id: lock.workspaceId,
+              mode: lock.mode,
+              owner: lock.owner,
+              acquired_at: lock.acquiredAt,
+              expires_at: lock.expiresAt ?? null,
+              last_heartbeat: lock.lastHeartbeat ?? null,
+            },
+            true
+          );
+        } else {
+          console.log(`Lock renewed: ${lock.id}`);
+          console.log(`Workspace:    ${lock.workspaceId}`);
+          console.log(`Owner:        ${lock.owner}`);
+          console.log(`Heartbeat:    ${lock.lastHeartbeat}`);
+          console.log(`Expires:      ${lock.expiresAt}`);
         }
       } catch (err) {
         catchError(err, useJson);

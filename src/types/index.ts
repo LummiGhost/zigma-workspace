@@ -36,6 +36,7 @@ export interface WorkspaceLock {
   mode: "read" | "write";
   owner: string;
   expiresAt?: string;
+  lastHeartbeat?: string;
   acquiredAt: string;
 }
 
@@ -131,6 +132,7 @@ export interface WorkspaceLockRow {
   mode: string;
   owner: string;
   expires_at: string | null;
+  last_heartbeat: string | null;
   acquired_at: string;
 }
 
@@ -166,7 +168,9 @@ export const WorkspaceEventType = {
   STARTED: "workspace.started",
   SNAPSHOT_CREATED: "workspace.snapshot_created",
   LOCK_ACQUIRED: "workspace.lock_acquired",
+  LOCK_RENEWED: "workspace.lock_renewed",
   LOCK_RELEASED: "workspace.lock_released",
+  LOCK_RECLAIMED: "workspace.lock_reclaimed",
   CLEANED: "workspace.cleaned",
 } as const;
 
