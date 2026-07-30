@@ -1,5 +1,5 @@
 {
-  "name": "zigma-workspace",
+  "name": "@zigma-ai/zigma-workspace",
   "version": "0.1.0",
   "description": "Zigma workspace management CLI",
   "type": "module",
