@@ -1,3 +1,12 @@
+export type WorkspaceStatus =
+  | "CREATED"
+  | "PREPARING"
+  | "READY"
+  | "RUNNING"
+  | "WAIT_REVIEW"
+  | "MERGED"
+  | "CLEANED";
+
 export interface Workspace {
   id: string;
   projectId?: string;
@@ -9,14 +18,7 @@ export interface Workspace {
   branch: string;
   path: string;
   mode: "read-only" | "writable";
-  status:
-    | "created"
-    | "prepared"
-    | "locked"
-    | "active"
-    | "archived"
-    | "cleaned"
-    | "failed";
+  status: WorkspaceStatus;
   createdAt: string;
   updatedAt: string;
 }

@@ -5,12 +5,12 @@ import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
-  updateWorkspaceStatus,
   listWorkspaces,
   insertWorkspaceEvent,
+  getRepositoryCacheByUrl,
 } from "../db/queries.js";
+import { transitionStatus } from "../core/workspace.js";
 import { removeWorktree, listWorktrees } from "../git/index.js";
-import { getRepositoryCacheByUrl } from "../db/queries.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -48,7 +48,7 @@ export function cleanupWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  if (row.status === "cleaned") {
+  if (row.status === "CLEANED") {
     return {
       workspaceId,
       path: row.path,
@@ -100,7 +100,7 @@ export function cleanupWorkspace(
   }
 
   // Update status regardless of filesystem result
-  updateWorkspaceStatus(db, workspaceId, "cleaned", now());
+  transitionStatus(db, workspaceId, "CLEANED");
   emitEvent(db, workspaceId, "workspace.cleaned", { removed, message });
 
   return { workspaceId, path: workspacePath, removed, message };
@@ -126,7 +126,7 @@ export function detectOrphanWorktrees(
   // Build a set of known workspace paths
   const knownPaths = new Set(
     workspaceRows
-      .filter((r) => r.status !== "cleaned")
+      .filter((r) => r.status !== "CLEANED")
       .map((r) => r.path)
   );
 

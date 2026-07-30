@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type {
   Workspace,
+  WorkspaceStatus,
   CreateWorkspaceInput,
   BindWorkspaceRunInput,
   WorkspaceManifest,
@@ -68,6 +69,57 @@ function emitEvent(
     event,
     data: data ? JSON.stringify(data) : null,
     created_at: now(),
+  });
+}
+
+const LEGAL_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
+  CREATED: ["PREPARING"],
+  PREPARING: ["READY"],
+  READY: ["RUNNING"],
+  RUNNING: ["WAIT_REVIEW", "READY"],
+  WAIT_REVIEW: ["MERGED", "RUNNING"],
+  MERGED: ["CLEANED"],
+  CLEANED: [],
+};
+
+function isValidTransition(
+  current: string,
+  target: WorkspaceStatus
+): boolean {
+  // Any state can transition to CLEANED
+  if (target === "CLEANED") return true;
+  const allowed = LEGAL_TRANSITIONS[current as WorkspaceStatus];
+  if (!allowed) return false;
+  return allowed.includes(target);
+}
+
+export function transitionStatus(
+  db: Database.Database,
+  workspaceId: string,
+  newStatus: WorkspaceStatus
+): void {
+  const row = getWorkspaceById(db, workspaceId);
+  if (!row) {
+    throw new ZigmaError(
+      "WORKSPACE_NOT_FOUND",
+      `Workspace ${workspaceId} not found`,
+      { workspaceId }
+    );
+  }
+
+  if (!isValidTransition(row.status, newStatus)) {
+    throw new ZigmaError(
+      "INVALID_INPUT",
+      `Invalid status transition: ${row.status} -> ${newStatus}`,
+      { workspaceId, currentStatus: row.status, targetStatus: newStatus }
+    );
+  }
+
+  const ts = now();
+  updateWorkspaceStatus(db, workspaceId, newStatus, ts);
+  emitEvent(db, workspaceId, "workspace.status_changed", {
+    previous: row.status,
+    current: newStatus,
   });
 }
 
@@ -158,7 +210,7 @@ export function createWorkspace(
     branch,
     path: workspacePath,
     mode,
-    status: "created",
+    status: "CREATED",
     created_at: ts,
     updated_at: ts,
   };
@@ -185,7 +237,8 @@ export function createWorkspace(
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 
   // Mark as prepared
-  updateWorkspaceStatus(db, wsId, "prepared", now());
+  transitionStatus(db, wsId, "PREPARING");
+  transitionStatus(db, wsId, "READY");
   emitEvent(db, wsId, "workspace.created", { branch, baseCommit });
 
   const finalRow = getWorkspaceById(db, wsId);
@@ -211,7 +264,7 @@ export function bindRun(
     input.flowRunId ?? row.flow_run_id,
     ts
   );
-  updateWorkspaceStatus(db, input.workspaceId, "active", ts);
+  transitionStatus(db, input.workspaceId, "RUNNING");
 
   emitEvent(db, input.workspaceId, "workspace.bound", {
     taskId: input.taskId,

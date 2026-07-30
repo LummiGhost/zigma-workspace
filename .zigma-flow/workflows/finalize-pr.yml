@@ -1,0 +1,22 @@
+name: finalize-pr
+version: 1.0.0
+description: >
+  Commit staged changes and create a PR.
+  Run this when code changes are already made and validated,
+  and the branch has been created.
+
+on:
+  manual:
+
+inputs:
+  task:
+    type: string
+    required: true
+
+jobs:
+  commit-and-pr:
+    steps:
+      - id: commit-push-pr
+        type: script
+        run: "git add -A && git commit -m \"feat: add Workspace State Machine (closes #3)\" && git push -u origin feat/issue-3-workspace-state-machine && gh pr create --title \"feat: add Workspace State Machine\" --body \"Closes #3\" --head feat/issue-3-workspace-state-machine"
+        failure_policy: fail

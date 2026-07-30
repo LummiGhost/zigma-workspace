@@ -1,0 +1,279 @@
+name: code-change
+version: 0.6.0
+
+on:
+  manual:
+
+inputs:
+  task:
+    type: string
+    required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+jobs:
+  intake:
+    workspace:
+      mode: read-only
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  code-map:
+    needs:
+      - intake
+    workspace:
+      mode: read-only
+    steps:
+      - id: map
+        type: agent
+        prompt: code-map
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          existing_files: {}
+          new_files: {}
+          test_files: {}
+          modules: {}
+          risk_areas: {}
+          rationale: {}
+        expose:
+          skills:
+            - code
+
+  risk-scan:
+    needs:
+      - code-map
+    workspace:
+      mode: read-only
+    steps:
+      - id: validate-report
+        type: script
+        run: |
+          node -e "process.exit(require('fs').existsSync(process.argv[1])?0:1)" -- jobs/code-map/attempts/1/steps/map/report.json
+        on_failure: fail
+      - id: validate-outputs
+        type: script
+        run: |
+          node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(process.argv[1],'utf-8'));const m=['outputs','summary'].filter(f=>!(f in d));if(m.length){console.error('Missing:',m);process.exit(1)}" -- jobs/code-map/attempts/1/steps/map/report.json
+        on_failure: fail
+
+  plan:
+    needs:
+      - risk-scan
+    workspace:
+      mode: read-only
+    steps:
+      - id: plan
+        type: agent
+        prompt: plan
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          plan_summary: {}
+          steps: {}
+          risks: {}
+          validation_commands: {}
+          contracts_to_preserve: {}
+          out_of_scope: {}
+        returns:
+          status:
+            values:
+              - ready
+              - needs_architecture_design
+              - blocked
+        on_return:
+          needs_architecture_design:
+            activate_job: architecture-design
+        expose:
+          skills:
+            - code
+
+  architecture-design:
+    activation: optional
+    needs:
+      - plan
+    workspace:
+      mode: read-only
+    steps:
+      - id: design
+        type: agent
+        prompt: architecture-design
+        with:
+          task: "${{ inputs.task }}"
+        expose:
+          skills:
+            - code
+
+  implement:
+    needs:
+      - plan
+      - architecture-design
+    retry:
+      max_attempts: 3
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+        expose:
+          skills:
+            - code
+      - id: collect-diff
+        type: script
+        run: "git diff HEAD"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  install-deps:
+    needs:
+      - implement
+    workspace:
+      mode: writable
+    steps:
+      - id: install
+        type: script
+        run: "pnpm install --frozen-lockfile"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  build:
+    needs:
+      - implement
+    workspace:
+      mode: read-only
+    steps:
+      - id: build
+        type: script
+        run: "pnpm build"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  static-check:
+    needs:
+      - build
+      - install-deps
+    workspace:
+      mode: read-only
+    steps:
+      - id: check
+        type: script
+        run: "pnpm typecheck"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  unit-test:
+    needs:
+      - implement
+      - install-deps
+    workspace:
+      mode: read-only
+    steps:
+      - id: test
+        type: script
+        run: "pnpm test"
+        env:
+          CI: "true"
+        on_failure: fail
+
+  review:
+    needs:
+      - static-check
+      - unit-test
+    workspace:
+      mode: read-only
+    steps:
+      - id: review
+        type: agent
+        prompt: review
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          verdict: {}
+          checked_files: {}
+          checked_artifacts: {}
+          validation_evidence: {}
+          findings: {}
+          accepted_risks: {}
+          non_blocking_improvements: {}
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+              - needs_architecture_design
+        on_return:
+          rejected:
+            retry_job: implement
+          needs_architecture_design:
+            activate_job: architecture-design
+        expose:
+          skills:
+            - code
+
+  gate-merge:
+    activation: optional
+    needs:
+      - review
+    steps:
+      - id: gate-merge
+        type: human
+        prompt: |
+          Review the implementation summary and approve before merging.
+        instructions: |
+          Use `zigma-flow approve --job gate-merge` to proceed,
+          or `zigma-flow reject --job gate-merge --comment "reason"` to send back.
+        approvers: []
+        outputs:
+          decision: human.decision
+          comment: human.comment
+
+  summarize:
+    needs:
+      - review
+      - gate-merge
+    workspace:
+      mode: read-only
+    steps:
+      - id: summarize
+        type: agent
+        prompt: summarize
+        with:
+          task: "${{ inputs.task }}"
+        outputs:
+          final_summary: {}
+          remaining_risks: {}
+          summary_artifact: {}
+        required_artifacts:
+          - summary.md
+        expose:
+          skills:
+            - code
