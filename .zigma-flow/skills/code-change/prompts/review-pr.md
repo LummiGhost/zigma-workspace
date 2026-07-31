@@ -80,11 +80,8 @@ REVIEW
 
 ### 6. Return Verdict
 
-- **Approved**: zero blocking findings AND all validation commands pass →
-  complete normally **without returning any step-return status**. Do NOT return
-  `approved` or any other value; just finish.
-- **Rejected**: one or more blocking findings OR validation failures →
-  return step-return status `rejected`.
+- `approved`: zero blocking findings AND all validation commands pass.
+- `rejected`: one or more blocking findings OR validation failures.
 
 Non-blocking findings do NOT cause rejection. Include them in the PR comment only.
 
