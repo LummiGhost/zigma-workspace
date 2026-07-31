@@ -483,9 +483,9 @@ describe("event data JSON payload (snake_case convention)", () => {
   });
 });
 
-// ── Centralized emitEvent function ──────────────────────────────────────────
+// ── Centralized emitWorkspaceEvent function ──────────────────────────────────────────
 
-describe("emitEvent (centralized)", () => {
+describe("emitWorkspaceEvent (centralized)", () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -497,17 +497,17 @@ describe("emitEvent (centralized)", () => {
   });
 
   it("should be importable from src/core/events.js", async () => {
-    // This verifies the centralized emitEvent module exists
+    // This verifies the centralized emitWorkspaceEvent module exists
     const mod = await import("../core/events.js");
-    expect(mod).toHaveProperty("emitEvent");
-    expect(typeof mod.emitEvent).toBe("function");
+    expect(mod).toHaveProperty("emitWorkspaceEvent");
+    expect(typeof mod.emitWorkspaceEvent).toBe("function");
   });
 
   it("should emit an event and make it retrievable via listEventsForWorkspace", async () => {
-    const { emitEvent } = await import("../core/events.js");
+    const { emitWorkspaceEvent } = await import("../core/events.js");
     const wsId = `ws_${uuidv4()}`;
 
-    emitEvent(db, wsId, "workspace.created", {
+    emitWorkspaceEvent(db, wsId, "workspace.created", {
       branch: "feat/x",
       base_commit: "abc123",
     });
@@ -520,10 +520,10 @@ describe("emitEvent (centralized)", () => {
   });
 
   it("should accept an optional actor parameter", async () => {
-    const { emitEvent } = await import("../core/events.js");
+    const { emitWorkspaceEvent } = await import("../core/events.js");
     const wsId = `ws_${uuidv4()}`;
 
-    emitEvent(db, wsId, "workspace.locked", { mode: "write", owner: "job-1" }, "scheduler-v2");
+    emitWorkspaceEvent(db, wsId, "workspace.locked", { mode: "write", owner: "job-1" }, "scheduler-v2");
 
     const events = listEventsForWorkspace(db, wsId);
     expect(events).toHaveLength(1);
@@ -531,10 +531,10 @@ describe("emitEvent (centralized)", () => {
   });
 
   it("should default actor to null when not provided", async () => {
-    const { emitEvent } = await import("../core/events.js");
+    const { emitWorkspaceEvent } = await import("../core/events.js");
     const wsId = `ws_${uuidv4()}`;
 
-    emitEvent(db, wsId, "workspace.created", { branch: "main", base_commit: "def" });
+    emitWorkspaceEvent(db, wsId, "workspace.created", { branch: "main", base_commit: "def" });
 
     const events = listEventsForWorkspace(db, wsId);
     expect(events).toHaveLength(1);
@@ -542,10 +542,10 @@ describe("emitEvent (centralized)", () => {
   });
 
   it("should serialize data to JSON with snake_case keys", async () => {
-    const { emitEvent } = await import("../core/events.js");
+    const { emitWorkspaceEvent } = await import("../core/events.js");
     const wsId = `ws_${uuidv4()}`;
 
-    emitEvent(db, wsId, "workspace.bound", {
+    emitWorkspaceEvent(db, wsId, "workspace.bound", {
       task_id: "task-1",
       flow_run_id: "run-1",
     });
@@ -556,11 +556,11 @@ describe("emitEvent (centralized)", () => {
   });
 
   it("should generate unique IDs for each event", async () => {
-    const { emitEvent } = await import("../core/events.js");
+    const { emitWorkspaceEvent } = await import("../core/events.js");
     const wsId = `ws_${uuidv4()}`;
 
-    emitEvent(db, wsId, "workspace.created", { branch: "main", base_commit: "abc" });
-    emitEvent(db, wsId, "workspace.locked", { mode: "write", owner: "job-1" });
+    emitWorkspaceEvent(db, wsId, "workspace.created", { branch: "main", base_commit: "abc" });
+    emitWorkspaceEvent(db, wsId, "workspace.locked", { mode: "write", owner: "job-1" });
 
     const events = listEventsForWorkspace(db, wsId);
     expect(events).toHaveLength(2);
