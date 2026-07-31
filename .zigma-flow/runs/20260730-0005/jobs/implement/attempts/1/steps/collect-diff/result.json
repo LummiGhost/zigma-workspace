@@ -1,8 +1,0 @@
-{
-  "exit_code": 0,
-  "timed_out": false,
-  "stdout": "artifact://20260730-0005/jobs/implement/attempts/1/steps/collect-diff/stdout",
-  "stderr": "artifact://20260730-0005/jobs/implement/attempts/1/steps/collect-diff/stderr",
-  "started_at": "2026-07-30T12:31:03.128Z",
-  "ended_at": "2026-07-30T12:31:03.211Z"
-}

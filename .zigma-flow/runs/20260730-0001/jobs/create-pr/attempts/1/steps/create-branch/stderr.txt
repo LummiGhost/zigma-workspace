@@ -1,1 +1,0 @@
-Switched to a new branch 'feat/issue-3-workspace-state-machine'

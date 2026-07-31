@@ -1,9 +1,0 @@
-{
-  "outputs": {
-    "files_changed": "src/types/index.ts, src/db/index.ts, src/db/queries.ts, src/core/lock.ts, src/cli/index.ts",
-    "summary": "Implemented lease-based lock management: added last_heartbeat column, auto-TTL on acquire (default 5 min), lock renewal via heartbeat, expired lock reclamation, new event types (lock_renewed, lock_reclaimed), and renew CLI command. Build passes typecheck + smoke test."
-  },
-  "artifacts": [],
-  "signals": [],
-  "summary": "Implemented GitHub Issue #5: Lease-based Lock Management. Updated WorkspaceLock/WorkspaceLockRow types with lastHeartbeat field. Added last_heartbeat column to workspace_locks table with migration. Added renewLock() and reclaimExpiredLocks() to db/queries.ts. Updated lockWorkspace() to auto-set 5-minute TTL, set last_heartbeat, and reclaim expired locks before acquiring. Added renewLock() core function with heartbeat + expires_at update. Added renew CLI command with --ttl option. Updated status output to show expires_at and last_heartbeat. Added LOCK_RENEWED and LOCK_RECLAIMED event types. All changes compile and pass smoke test."
-}

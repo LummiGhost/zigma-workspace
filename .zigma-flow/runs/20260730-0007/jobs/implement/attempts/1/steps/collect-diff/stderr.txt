@@ -1,3 +1,0 @@
-warning: in the working copy of '.zigma-flow/runs/20260730-0006/artifacts.jsonl', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of '.zigma-flow/runs/20260730-0006/events.jsonl', LF will be replaced by CRLF the next time Git touches it
-warning: in the working copy of '.zigma-flow/runs/20260730-0006/state.json', LF will be replaced by CRLF the next time Git touches it

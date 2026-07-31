@@ -1,8 +1,0 @@
-{
-  "exit_code": 0,
-  "timed_out": false,
-  "stdout": "artifact://20260730-0007/jobs/create-pr/attempts/1/steps/commit-push-pr/stdout",
-  "stderr": "artifact://20260730-0007/jobs/create-pr/attempts/1/steps/commit-push-pr/stderr",
-  "started_at": "2026-07-30T12:42:25.383Z",
-  "ended_at": "2026-07-30T12:42:34.035Z"
-}
