@@ -1,0 +1,322 @@
+name: task-invoke
+version: 1.0.0
+description: >
+  TDD-first issue-driven workflow for zigma-workspace.
+  Reads a GitHub issue, collects context, plans, optionally researches/designs,
+  writes failing unit tests (red), implements until they pass (green) with a
+  hard validation gate, creates a draft PR once, runs an AI review loop that
+  posts findings to the PR, and converts the PR to ready on approval.
+
+on:
+  manual:
+
+inputs:
+  issue_number:
+    type: string
+    required: true
+
+skills:
+  code:
+    uses: skill://zigma.code-change@1
+
+permissions:
+  contents: read
+  edits: write
+  commands: none
+  workflow_state: none
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Step 1 + 2a: Fetch the GitHub issue and analyse scope / difficulty
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  intake:
+    steps:
+      - id: analyze
+        type: agent
+        prompt: intake-issue
+        with:
+          issue_number: "${{ inputs.issue_number }}"
+        outputs:
+          issue_title: {}
+          task_summary: {}
+          scope: {}
+          complexity_profile: {}
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 2b: Map relevant code surface
+  # ─────────────────────────────────────────────────────────────────────────
+  code-map:
+    needs:
+      - intake
+    steps:
+      - id: map
+        type: agent
+        prompt: code-map
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+        outputs:
+          existing_files: {}
+          new_files: {}
+          test_files: {}
+          modules: {}
+          risk_areas: {}
+          rationale: {}
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 2c: Create implementation plan; optionally activate research or
+  #          architecture-design based on complexity
+  # ─────────────────────────────────────────────────────────────────────────
+  plan:
+    needs:
+      - code-map
+    steps:
+      - id: plan
+        type: agent
+        prompt: plan
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+        outputs:
+          plan_summary: {}
+          steps: {}
+          risks: {}
+          validation_commands: {}
+          contracts_to_preserve: {}
+          out_of_scope: {}
+        returns:
+          status:
+            values:
+              - ready
+              - needs_poc
+              - needs_architecture_design
+              - blocked
+        on_return:
+          needs_poc:
+            activate_job: research
+          needs_architecture_design:
+            activate_job: architecture-design
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 3 (optional): Proof-of-concept / technical research
+  # ─────────────────────────────────────────────────────────────────────────
+  research:
+    activation: optional
+    needs:
+      - plan
+    steps:
+      - id: research
+        type: agent
+        prompt: research
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+          plan: "${{ jobs.plan.outputs.plan_summary }}"
+        outputs:
+          findings: {}
+          recommendation: {}
+          constraints: {}
+        returns:
+          status:
+            values:
+              - done
+              - needs_architecture_design
+        on_return:
+          needs_architecture_design:
+            activate_job: architecture-design
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 4 (optional): Architecture design
+  # ─────────────────────────────────────────────────────────────────────────
+  architecture-design:
+    activation: optional
+    needs:
+      - plan
+      - research
+    steps:
+      - id: design
+        type: agent
+        prompt: architecture-design
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+        outputs:
+          decision: {}
+          constraints: {}
+          implementation_notes: {}
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 5: TDD Red phase — create feature branch + write failing unit tests
+  # ─────────────────────────────────────────────────────────────────────────
+  write-tests:
+    needs:
+      - plan
+      - research
+      - architecture-design
+    steps:
+      - id: write-tests
+        type: agent
+        prompt: write-tests
+        with:
+          issue_number: "${{ inputs.issue_number }}"
+          issue_title: "${{ jobs.intake.outputs.issue_title }}"
+          task: "${{ jobs.intake.outputs.task_summary }}"
+          plan: "${{ jobs.plan.outputs.plan_summary }}"
+        outputs:
+          branch: {}
+          test_files: {}
+          test_summary: {}
+          test_command: {}
+        expose:
+          skills:
+            - code
+      - id: verify-red
+        type: script
+        run: "npm run test:unit"
+        env:
+          CI: "true"
+        failure_policy: continue   # tests are expected to FAIL here (red phase)
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 8: Create draft PR (runs exactly once, before the implement loop)
+  # ─────────────────────────────────────────────────────────────────────────
+  create-draft-pr:
+    needs:
+      - write-tests
+    steps:
+      - id: create-pr
+        type: agent
+        prompt: create-draft-pr
+        with:
+          issue_number: "${{ inputs.issue_number }}"
+          issue_title: "${{ jobs.intake.outputs.issue_title }}"
+          branch: "${{ jobs.write-tests.outputs.branch }}"
+        outputs:
+          pr_number: {}
+          pr_url: {}
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Steps 6 + 7: TDD Green phase — implement, then hard validation gate.
+  # Hard gate failure causes a full job retry so the agent can fix the code.
+  # ─────────────────────────────────────────────────────────────────────────
+  implement:
+    needs:
+      - create-draft-pr
+    retry:
+      max_attempts: 5
+      on_exceeded:
+        status: failed
+    steps:
+      - id: implement
+        type: agent
+        prompt: implement-tdd or fix review finds in pr comments
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+          plan: "${{ jobs.plan.outputs.plan_summary }}"
+          test_summary: "${{ jobs.write-tests.outputs.test_summary }}"
+          pr_number: "${{ jobs.create-draft-pr.outputs.pr_number }}"
+        outputs:
+          summary: {}
+          files_changed: {}
+        expose:
+          skills:
+            - code
+      # Hard gate — each failure causes a full job retry (back to the agent step)
+      - id: typecheck
+        type: script
+        run: "npm run typecheck"
+        env:
+          CI: "true"
+        failure_policy: fail
+      - id: build
+        type: script
+        run: "npm run build"
+        env:
+          CI: "true"
+        failure_policy: fail
+      - id: unit-test
+        type: script
+        run: "npm run test:unit"
+        env:
+          CI: "true"
+        failure_policy: fail
+      - id: smoke-test
+        type: script
+        run: "npm test"
+        env:
+          CI: "true"
+        failure_policy: fail
+      - id: push
+        type: script
+        run: "git push"
+        env:
+          CI: "true"
+        failure_policy: fail
+      - id: collect-diff
+        type: script
+        run: "git log origin/main..HEAD --oneline && echo '---' && git diff origin/main...HEAD --stat"
+        failure_policy: continue
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 9: AI review — post findings to the PR; reject sends implement back
+  # ─────────────────────────────────────────────────────────────────────────
+  review:
+    needs:
+      - implement
+    steps:
+      - id: review
+        type: agent
+        prompt: review-pr
+        with:
+          task: "${{ jobs.intake.outputs.task_summary }}"
+          plan: "${{ jobs.plan.outputs.plan_summary }}"
+          pr_number: "${{ jobs.create-draft-pr.outputs.pr_number }}"
+          pr_url: "${{ jobs.create-draft-pr.outputs.pr_url }}"
+        outputs:
+          verdict: {}
+          findings: {}
+          checked_files: {}
+          validation_evidence: {}
+          non_blocking_improvements: {}
+        returns:
+          status:
+            values:
+              - approved
+              - rejected
+        on_return:
+          rejected:
+            retry_job: implement
+        expose:
+          skills:
+            - code
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Step 10: Convert draft PR to "ready for review"
+  # ─────────────────────────────────────────────────────────────────────────
+  convert-pr:
+    needs:
+      - review
+    steps:
+      - id: ready
+        type: agent
+        prompt: convert-pr-ready
+        with:
+          pr_number: "${{ jobs.create-draft-pr.outputs.pr_number }}"
+          pr_url: "${{ jobs.create-draft-pr.outputs.pr_url }}"
+        expose:
+          skills:
+            - code

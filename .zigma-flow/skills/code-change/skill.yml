@@ -16,16 +16,30 @@ knowledge:
 prompts:
   - id: intake
     path: prompts/intake.md
+  - id: intake-issue
+    path: prompts/intake-issue.md
   - id: code-map
     path: prompts/code-map.md
   - id: plan
     path: prompts/plan.md
+  - id: research
+    path: prompts/research.md
   - id: architecture-design
     path: prompts/architecture-design.md
+  - id: write-tests
+    path: prompts/write-tests.md
+  - id: create-draft-pr
+    path: prompts/create-draft-pr.md
   - id: implement
     path: prompts/implement.md
+  - id: implement-tdd
+    path: prompts/implement-tdd.md
   - id: review
     path: prompts/review.md
+  - id: review-pr
+    path: prompts/review-pr.md
+  - id: convert-pr-ready
+    path: prompts/convert-pr-ready.md
   - id: summarize
     path: prompts/summarize.md
 
