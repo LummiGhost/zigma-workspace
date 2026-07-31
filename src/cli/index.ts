@@ -3,6 +3,9 @@ import { Command } from "commander";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import YAML from "yaml";
 import { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
 import { openDb } from "../db/index.js";
 import {
@@ -16,6 +19,8 @@ import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
+import { validateDefinition } from "../schema/validator.js";
+import type { WorkspaceDefinition } from "../schema/definition.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
 import type { Workspace, ZigmaErrorCode } from "../types/index.js";
@@ -769,6 +774,176 @@ program
       }
     }
   );
+
+// ── validate ────────────────────────────────────────────────────────────────
+
+program
+  .command("validate")
+  .description("Validate a workspace definition YAML file")
+  .requiredOption("--file <path>", "Path to workspace definition YAML file")
+  .option("--json", "Output JSON")
+  .action(async (opts: { file: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      const filePath = path.resolve(opts.file);
+      if (!fs.existsSync(filePath)) {
+        outputError("INVALID_INPUT", `File not found: ${filePath}`, useJson);
+      }
+
+      const raw = fs.readFileSync(filePath, "utf-8");
+      let parsed: unknown;
+      try {
+        parsed = YAML.parse(raw);
+      } catch (err) {
+        outputError(
+          "INVALID_INPUT",
+          `Failed to parse YAML: ${err instanceof Error ? err.message : String(err)}`,
+          useJson,
+        );
+      }
+
+      const result = validateDefinition(parsed);
+
+      if (useJson) {
+        outputOk(result, true);
+      } else {
+        if (result.valid) {
+          console.log(`Valid workspace definition: ${filePath}`);
+        } else {
+          console.log(`Invalid workspace definition: ${filePath}`);
+          for (const err of result.errors) {
+            console.log(`  - [${err.code}] ${err.path}: ${err.message}`);
+          }
+        }
+      }
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
+
+// ── apply ────────────────────────────────────────────────────────────────────
+
+program
+  .command("apply")
+  .description("Apply a workspace definition YAML file to create a workspace")
+  .requiredOption("--file <path>", "Path to workspace definition YAML file")
+  .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .option("--json", "Output JSON")
+  .action(async (opts: { file: string; operationId?: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    const globalOpts = program.opts<{ stateDir?: string }>();
+    try {
+      const filePath = path.resolve(opts.file);
+      if (!fs.existsSync(filePath)) {
+        outputError("INVALID_INPUT", `File not found: ${filePath}`, useJson);
+      }
+
+      const raw = fs.readFileSync(filePath, "utf-8");
+      let parsed: unknown;
+      try {
+        parsed = YAML.parse(raw);
+      } catch (err) {
+        outputError(
+          "INVALID_INPUT",
+          `Failed to parse YAML: ${err instanceof Error ? err.message : String(err)}`,
+          useJson,
+        );
+      }
+
+      const validation = validateDefinition(parsed);
+      if (!validation.valid) {
+        if (useJson) {
+          outputError(
+            "INVALID_INPUT",
+            "Definition validation failed",
+            useJson,
+            { errors: validation.errors },
+          );
+        } else {
+          console.log(`Invalid workspace definition: ${filePath}`);
+          for (const err of validation.errors) {
+            console.log(`  - [${err.code}] ${err.path}: ${err.message}`);
+          }
+          process.exit(1);
+        }
+      }
+
+      const def = parsed as WorkspaceDefinition;
+      const { config, db } = setup(globalOpts.stateDir);
+
+      if (opts.operationId) {
+        const rawBytes = Buffer.from(raw, "utf-8");
+        const inputHash = crypto.createHash("sha256").update(rawBytes).digest("hex");
+        const outcome = reserveOrCheckIdempotency(db, opts.operationId, "apply", { fileHash: inputHash });
+        if (outcome.type === "hit") {
+          if (useJson) {
+            console.log(JSON.stringify(outcome.cachedResult, null, 2));
+          } else {
+            console.log(`Using cached result for operation ID "${opts.operationId}" (already executed).`);
+          }
+          return;
+        }
+        if (outcome.type === "conflict") {
+          outputError(
+            "OPERATION_ID_CONFLICT",
+            `Operation ID "${opts.operationId}" was already used with different inputs`,
+            useJson,
+            { operationId: opts.operationId },
+          );
+        }
+      }
+
+      // Apply the workspace definition based on type
+      if (def.spec.type === 'worktree') {
+        const workspace = createWorkspace(db, config, {
+          repositoryUrl: def.spec.repository,
+          baseRef: def.spec.ref,
+          branch: `zigma-${def.metadata.name}-${def.spec.ref.replace(/\//g, '-')}`,
+          mode: (def.spec.mode as 'read-only' | 'writable') ?? 'writable',
+          projectId: def.metadata.labels?.project,
+          taskId: def.metadata.labels?.task,
+          flowRunId: def.metadata.annotations?.['zigma.ai/flow-run'],
+        });
+
+        const data = {
+          workspace_id: workspace.id,
+          path: workspace.path,
+          branch: workspace.branch,
+          base_ref: workspace.baseRef,
+          base_commit: workspace.baseCommit,
+          mode: workspace.mode,
+          status: workspace.status,
+          manifest_path: `${workspace.path}/.zigma-workspace.json`,
+          created_at: workspace.createdAt,
+          definition_file: filePath,
+        };
+
+        if (opts.operationId) {
+          commitIdempotency(db, opts.operationId, { contract_version: CONTRACT_VERSION, ok: true, data });
+        }
+
+        if (useJson) {
+          outputOk(data, true);
+        } else {
+          console.log(`Workspace created from definition: ${filePath}`);
+          console.log(formatWorkspace(workspace));
+        }
+      } else if (def.spec.type === 'docker' || def.spec.type === 'workspace') {
+        // Docker and workspace types: store as metadata, actual creation by adapter
+        const wsId = `ws_${crypto.randomUUID()}`;
+        const ts = new Date().toISOString();
+
+        outputError(
+          "INVALID_INPUT",
+          `Workspace type "${def.spec.type}" is not yet supported via CLI apply. Use validate to check the definition, then create via the appropriate adapter.`,
+          useJson,
+          { workspaceType: def.spec.type },
+        );
+      }
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 

@@ -64,6 +64,36 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
+const UPGRADE_SQL = `
+CREATE TABLE IF NOT EXISTS workspace_idempotency (
+  operation_id TEXT PRIMARY KEY,
+  command TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  result_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
+function applyUpgrades(db: Database.Database): void {
+  try {
+    db.exec(UPGRADE_SQL);
+  } catch {
+    // Table may already exist from earlier schema
+  }
+
+  // v0.2: add workspace_type and definition_path to workspaces
+  try {
+    db.exec(`ALTER TABLE workspaces ADD COLUMN workspace_type TEXT`);
+  } catch {
+    // Column already exists
+  }
+  try {
+    db.exec(`ALTER TABLE workspaces ADD COLUMN definition_path TEXT`);
+  } catch {
+    // Column already exists
+  }
+}
+
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const existing = _dbMap.get(config.dbPath);
   if (existing) return existing;
@@ -71,6 +101,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  applyUpgrades(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }
