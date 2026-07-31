@@ -285,10 +285,6 @@ jobs:
           pr_url: "${{ jobs.create-draft-pr.outputs.pr_url }}"
         outputs:
           verdict: {}
-          findings: {}
-          checked_files: {}
-          validation_evidence: {}
-          non_blocking_improvements: {}
         returns:
           status:
             values:
