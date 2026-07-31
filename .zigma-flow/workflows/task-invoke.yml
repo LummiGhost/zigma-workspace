@@ -180,7 +180,7 @@ jobs:
             - code
       - id: verify-red
         type: script
-        run: "npm run test:unit"
+        run: "npm run test:unit || true"
         env:
           CI: "true"
         failure_policy: continue   # tests are expected to FAIL here (red phase)
