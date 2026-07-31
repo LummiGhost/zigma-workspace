@@ -232,41 +232,13 @@ jobs:
         expose:
           skills:
             - code
-      # Hard gate — each failure causes a full job retry (back to the agent step)
-      - id: typecheck
+      # Hard gate — all checks must pass; single step workaround for multi-step bug (#259)
+      - id: gate
         type: script
-        run: "npm run typecheck"
+        run: "npm run typecheck && npm run build && npm run test:unit && npm test && git push && git log origin/main..HEAD --oneline && echo '---' && git diff origin/main...HEAD --stat"
         env:
           CI: "true"
         failure_policy: fail
-      - id: build
-        type: script
-        run: "npm run build"
-        env:
-          CI: "true"
-        failure_policy: fail
-      - id: unit-test
-        type: script
-        run: "npm run test:unit"
-        env:
-          CI: "true"
-        failure_policy: fail
-      - id: smoke-test
-        type: script
-        run: "npm test"
-        env:
-          CI: "true"
-        failure_policy: fail
-      - id: push
-        type: script
-        run: "git push"
-        env:
-          CI: "true"
-        failure_policy: fail
-      - id: collect-diff
-        type: script
-        run: "git log origin/main..HEAD --oneline && echo '---' && git diff origin/main...HEAD --stat"
-        failure_policy: continue
 
   # ─────────────────────────────────────────────────────────────────────────
   # Step 9: AI review — post findings to the PR; reject sends implement back
@@ -292,7 +264,6 @@ jobs:
         returns:
           status:
             values:
-              - approved
               - rejected
         on_return:
           rejected:
