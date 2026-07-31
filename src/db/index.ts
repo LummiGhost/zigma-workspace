@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { migrateStatusColumn } from "./queries.js";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -71,6 +72,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  migrateStatusColumn(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }
