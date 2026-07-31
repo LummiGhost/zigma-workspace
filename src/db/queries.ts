@@ -101,9 +101,9 @@ export function insertWorkspaceLock(
 ): void {
   db.prepare(`
     INSERT INTO workspace_locks
-      (id, workspace_id, mode, owner, expires_at, acquired_at)
+      (id, workspace_id, mode, owner, expires_at, acquired_at, last_heartbeat)
     VALUES
-      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at)
+      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at, @last_heartbeat)
   `).run(row);
 }
 
@@ -111,17 +111,32 @@ export function getActiveLockForWorkspace(
   db: Database.Database,
   workspaceId: string
 ): WorkspaceLockRow | undefined {
+  const now = new Date().toISOString();
   return db
-    .prepare("SELECT * FROM workspace_locks WHERE workspace_id = ? ORDER BY acquired_at DESC LIMIT 1")
-    .get(workspaceId) as WorkspaceLockRow | undefined;
+    .prepare(
+      "SELECT * FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY acquired_at DESC LIMIT 1"
+    )
+    .get(workspaceId, now) as WorkspaceLockRow | undefined;
 }
 
 export function updateLockHeartbeat(
-  _db: Database.Database,
-  _workspaceId: string,
-  _lastHeartbeat: string
+  db: Database.Database,
+  workspaceId: string,
+  lastHeartbeat: string
 ): void {
-  throw new Error("not implemented");
+  db.prepare(
+    "UPDATE workspace_locks SET last_heartbeat = ? WHERE workspace_id = ?"
+  ).run(lastHeartbeat, workspaceId);
+}
+
+export function releaseLockForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  releasedAt: string
+): void {
+  db.prepare(
+    "UPDATE workspace_locks SET expires_at = ? WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+  ).run(releasedAt, workspaceId, releasedAt);
 }
 
 export function deleteLockForWorkspace(

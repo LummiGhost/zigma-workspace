@@ -12,7 +12,7 @@ import {
   getRepositoryCacheByUrl,
 } from "../db/queries.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
-import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
+import { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
@@ -413,6 +413,7 @@ program
                   owner: lock.owner,
                   acquired_at: lock.acquiredAt,
                   expires_at: lock.expiresAt ?? null,
+                  last_heartbeat: lock.lastHeartbeat ?? null,
                 }
               : null,
           },
@@ -763,6 +764,48 @@ program
           outputOk({ workspace_id: opts.workspace, unlocked: true }, true);
         } else {
           console.log(`Workspace ${opts.workspace} unlocked`);
+        }
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── heartbeat ────────────────────────────────────────────────────────────────
+
+program
+  .command("heartbeat")
+  .description("Send a heartbeat to extend a workspace lock lease")
+  .requiredOption("--workspace <id>", "Workspace ID")
+  .requiredOption("--owner <owner>", "Lock owner identifier")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: { workspace: string; owner: string; json?: boolean }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+        const lock = heartbeat(db, opts.workspace, opts.owner);
+
+        if (useJson) {
+          outputOk(
+            {
+              lock_id: lock.id,
+              workspace_id: lock.workspaceId,
+              mode: lock.mode,
+              owner: lock.owner,
+              acquired_at: lock.acquiredAt,
+              expires_at: lock.expiresAt ?? null,
+              last_heartbeat: lock.lastHeartbeat ?? null,
+            },
+            true
+          );
+        } else {
+          console.log(`Heartbeat sent: ${lock.id}`);
+          console.log(`Workspace: ${lock.workspaceId}`);
+          console.log(`Owner:     ${lock.owner}`);
+          console.log(`Heartbeat: ${lock.lastHeartbeat}`);
+          if (lock.expiresAt) console.log(`Expires:   ${lock.expiresAt}`);
         }
       } catch (err) {
         catchError(err, useJson);

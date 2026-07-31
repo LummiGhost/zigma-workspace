@@ -6,6 +6,7 @@ vi.mock("../db/queries.js", () => ({
   insertWorkspaceLock: vi.fn(),
   getActiveLockForWorkspace: vi.fn(),
   deleteLockForWorkspace: vi.fn(),
+  releaseLockForWorkspace: vi.fn(),
   updateWorkspaceStatus: vi.fn(),
   insertWorkspaceEvent: vi.fn(),
   updateLockHeartbeat: vi.fn(),

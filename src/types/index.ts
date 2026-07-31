@@ -133,6 +133,7 @@ export interface WorkspaceLockRow {
   owner: string;
   expires_at: string | null;
   acquired_at: string;
+  last_heartbeat: string | null;
 }
 
 export interface WorkspaceSnapshotRow {

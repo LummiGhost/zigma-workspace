@@ -6,9 +6,10 @@ import {
   getWorkspaceById,
   insertWorkspaceLock,
   getActiveLockForWorkspace,
-  deleteLockForWorkspace,
+  releaseLockForWorkspace,
   updateWorkspaceStatus,
   insertWorkspaceEvent,
+  updateLockHeartbeat,
 } from "../db/queries.js";
 
 function now(): string {
@@ -30,6 +31,11 @@ function emitEvent(
   });
 }
 
+function isExpired(expiresAt: string | null): boolean {
+  if (expiresAt === null) return false;
+  return expiresAt <= now();
+}
+
 export function lockWorkspace(
   db: Database.Database,
   workspaceId: string,
@@ -42,14 +48,18 @@ export function lockWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  // Check for existing lock
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
   if (existingLock) {
-    throw new ZigmaError(
-      "WORKSPACE_LOCK_CONFLICT",
-      `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
-      { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
-    );
+    // getActiveLockForWorkspace filters expired locks at the DB level,
+    // but we also check here for callers that bypass the DB (e.g. mocks).
+    if (!isExpired(existingLock.expires_at)) {
+      throw new ZigmaError(
+        "WORKSPACE_LOCK_CONFLICT",
+        `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
+        { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
+      );
+    }
+    // Expired lock — reclaim it by proceeding to acquisition
   }
 
   const lockId = `lock_${uuidv4()}`;
@@ -62,6 +72,7 @@ export function lockWorkspace(
     owner,
     expires_at: expiresAt ?? null,
     acquired_at: acquiredAt,
+    last_heartbeat: acquiredAt,
   });
 
   updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
@@ -74,6 +85,7 @@ export function lockWorkspace(
     owner,
     expiresAt,
     acquiredAt,
+    lastHeartbeat: acquiredAt,
   };
 }
 
@@ -88,13 +100,11 @@ export function unlockWorkspace(
 
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
   if (!existingLock) {
-    // Already unlocked — not an error, just a no-op with a note
     return;
   }
 
-  deleteLockForWorkspace(db, workspaceId);
+  releaseLockForWorkspace(db, workspaceId, now());
 
-  // Restore status to active if it was locked
   if (wsRow.status === "locked") {
     updateWorkspaceStatus(db, workspaceId, "active", now());
   }
@@ -105,11 +115,44 @@ export function unlockWorkspace(
 }
 
 export function heartbeat(
-  _db: Database.Database,
-  _workspaceId: string,
-  _owner: string
+  db: Database.Database,
+  workspaceId: string,
+  owner: string
 ): WorkspaceLock {
-  throw new Error("not implemented");
+  const wsRow = getWorkspaceById(db, workspaceId);
+  if (!wsRow) {
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
+  }
+
+  const activeLock = getActiveLockForWorkspace(db, workspaceId);
+  if (!activeLock) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `No active lock found for workspace ${workspaceId}`,
+      { workspaceId }
+    );
+  }
+
+  if (activeLock.owner !== owner) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Lock owner mismatch for workspace ${workspaceId}: expected ${owner}, got ${activeLock.owner}`,
+      { workspaceId, expectedOwner: owner, actualOwner: activeLock.owner }
+    );
+  }
+
+  const heartbeatTime = now();
+  updateLockHeartbeat(db, workspaceId, heartbeatTime);
+
+  return {
+    id: activeLock.id,
+    workspaceId: activeLock.workspace_id,
+    mode: activeLock.mode as "read" | "write",
+    owner: activeLock.owner,
+    expiresAt: activeLock.expires_at ?? undefined,
+    acquiredAt: activeLock.acquired_at,
+    lastHeartbeat: heartbeatTime,
+  };
 }
 
 export function getLock(
@@ -125,5 +168,6 @@ export function getLock(
     owner: row.owner,
     expiresAt: row.expires_at ?? undefined,
     acquiredAt: row.acquired_at,
+    lastHeartbeat: row.last_heartbeat ?? undefined,
   };
 }

@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS workspace_locks (
   mode TEXT NOT NULL,
   owner TEXT NOT NULL,
   expires_at TEXT,
-  acquired_at TEXT NOT NULL
+  acquired_at TEXT NOT NULL,
+  last_heartbeat TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_snapshots (
