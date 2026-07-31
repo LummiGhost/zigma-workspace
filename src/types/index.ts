@@ -51,12 +51,44 @@ export interface WorkspaceDiff {
   summary: string;
 }
 
+// ── Artifact ─────────────────────────────────────────────────────────────────
+
+export const ARTIFACT_KINDS = [
+  "metadata",
+  "patch",
+  "log",
+  "report",
+  "generated-file",
+] as const;
+
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+export interface Artifact {
+  id: string;
+  snapshotId: string;
+  kind: ArtifactKind;
+  path: string;
+  checksum: string;
+  mediaType: string;
+  createdAt: string;
+}
+
+export interface ArtifactRow {
+  id: string;
+  snapshot_id: string;
+  kind: string;
+  path: string;
+  checksum: string;
+  media_type: string;
+  created_at: string;
+}
+
+// ── WorkspaceSnapshot ───────────────────────────────────────────────────────
+
 export interface WorkspaceSnapshot {
   id: string;
   workspaceId: string;
   kind: "manifest" | "diff" | "archive" | "metadata-only";
-  path?: string;
-  checksum?: string;
   createdAt: string;
 }
 
@@ -138,8 +170,6 @@ export interface WorkspaceSnapshotRow {
   id: string;
   workspace_id: string;
   kind: string;
-  path: string | null;
-  checksum: string | null;
   created_at: string;
 }
 

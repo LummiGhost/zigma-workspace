@@ -5,6 +5,7 @@ import type {
   WorkspaceLockRow,
   WorkspaceSnapshotRow,
   WorkspaceEventRow,
+  ArtifactRow,
 } from "../types/index.js";
 
 // ── Workspaces ──────────────────────────────────────────────────────────────
@@ -131,9 +132,9 @@ export function insertWorkspaceSnapshot(
 ): void {
   db.prepare(`
     INSERT INTO workspace_snapshots
-      (id, workspace_id, kind, path, checksum, created_at)
+      (id, workspace_id, kind, created_at)
     VALUES
-      (@id, @workspace_id, @kind, @path, @checksum, @created_at)
+      (@id, @workspace_id, @kind, @created_at)
   `).run(row);
 }
 
@@ -212,4 +213,27 @@ export function listEventsForWorkspace(
       "SELECT * FROM workspace_events WHERE workspace_id = ? ORDER BY created_at ASC"
     )
     .all(workspaceId) as WorkspaceEventRow[];
+}
+
+// ── Artifacts ───────────────────────────────────────────────────────────────
+
+export function insertArtifact(
+  db: Database.Database,
+  row: ArtifactRow
+): void {
+  db.prepare(`
+    INSERT INTO artifacts
+      (id, snapshot_id, kind, path, checksum, media_type, created_at)
+    VALUES
+      (@id, @snapshot_id, @kind, @path, @checksum, @media_type, @created_at)
+  `).run(row);
+}
+
+export function listArtifactsForSnapshot(
+  db: Database.Database,
+  snapshotId: string
+): ArtifactRow[] {
+  return db
+    .prepare("SELECT * FROM artifacts WHERE snapshot_id = ? ORDER BY created_at DESC")
+    .all(snapshotId) as ArtifactRow[];
 }
