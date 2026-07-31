@@ -40,9 +40,18 @@ CREATE TABLE IF NOT EXISTS workspace_snapshots (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
   kind TEXT NOT NULL,
-  path TEXT,
-  checksum TEXT,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  snapshot_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  checksum TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (snapshot_id) REFERENCES workspace_snapshots(id)
 );
 
 CREATE TABLE IF NOT EXISTS workspace_events (

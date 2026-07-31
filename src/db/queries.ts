@@ -218,15 +218,22 @@ export function listEventsForWorkspace(
 // ── Artifacts ───────────────────────────────────────────────────────────────
 
 export function insertArtifact(
-  _db: Database.Database,
-  _row: ArtifactRow
+  db: Database.Database,
+  row: ArtifactRow
 ): void {
-  throw new Error("not implemented");
+  db.prepare(`
+    INSERT INTO artifacts
+      (id, snapshot_id, kind, path, checksum, media_type, created_at)
+    VALUES
+      (@id, @snapshot_id, @kind, @path, @checksum, @media_type, @created_at)
+  `).run(row);
 }
 
 export function listArtifactsForSnapshot(
-  _db: Database.Database,
-  _snapshotId: string
+  db: Database.Database,
+  snapshotId: string
 ): ArtifactRow[] {
-  throw new Error("not implemented");
+  return db
+    .prepare("SELECT * FROM artifacts WHERE snapshot_id = ? ORDER BY created_at DESC")
+    .all(snapshotId) as ArtifactRow[];
 }
