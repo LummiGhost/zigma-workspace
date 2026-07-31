@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
@@ -7,28 +6,13 @@ import {
   getWorkspaceById,
   updateWorkspaceStatus,
   listWorkspaces,
-  insertWorkspaceEvent,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import { removeWorktree, listWorktrees } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
 }
 
 export interface CleanupResult {
@@ -101,7 +85,7 @@ export function cleanupWorkspace(
 
   // Update status regardless of filesystem result
   updateWorkspaceStatus(db, workspaceId, "cleaned", now());
-  emitEvent(db, workspaceId, "workspace.cleaned", { removed, message });
+  emitWorkspaceEvent(db, workspaceId, "workspace.cleaned", { removed, message });
 
   return { workspaceId, path: workspacePath, removed, message };
 }

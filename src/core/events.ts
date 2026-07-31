@@ -1,14 +1,25 @@
+import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
+import type { WorkspaceEventName } from "../types/index.js";
+import { insertWorkspaceEvent } from "../db/queries.js";
 
-function _emit(
-  _db: Database.Database,
-  _workspaceId: string,
-  _event: string,
-  _data?: unknown,
-  _actor?: string
-): void {
-  // stub — will be implemented in green phase
+function now(): string {
+  return new Date().toISOString();
 }
 
-export const emitWorkspaceEvent = _emit;
-export const emitEvent = _emit;
+export function emitWorkspaceEvent(
+  db: Database.Database,
+  workspaceId: string,
+  event: WorkspaceEventName,
+  data?: unknown,
+  actor?: string
+): void {
+  insertWorkspaceEvent(db, {
+    id: `evt_${uuidv4()}`,
+    workspace_id: workspaceId,
+    event,
+    data: data !== undefined ? JSON.stringify(data) : null,
+    actor: actor ?? null,
+    created_at: now(),
+  });
+}
