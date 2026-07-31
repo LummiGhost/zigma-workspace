@@ -91,10 +91,8 @@ jobs:
         returns:
           status:
             values:
-              - ready
               - needs_poc
               - needs_architecture_design
-              - blocked
         on_return:
           needs_poc:
             activate_job: research
@@ -125,7 +123,6 @@ jobs:
         returns:
           status:
             values:
-              - done
               - needs_architecture_design
         on_return:
           needs_architecture_design:
