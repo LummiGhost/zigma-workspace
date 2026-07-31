@@ -12,10 +12,12 @@ import type {
 export function insertWorkspace(db: Database.Database, row: WorkspaceRow): void {
   db.prepare(`
     INSERT INTO workspaces
-      (id, project_id, task_id, flow_run_id, repository_url, base_ref, base_commit,
+      (id, project_id, task_id, flow_run_id, workflow_run_id, job_id, step_id, agent_id,
+       repository_url, base_ref, base_commit,
        branch, path, mode, status, created_at, updated_at)
     VALUES
-      (@id, @project_id, @task_id, @flow_run_id, @repository_url, @base_ref, @base_commit,
+      (@id, @project_id, @task_id, @flow_run_id, @workflow_run_id, @job_id, @step_id, @agent_id,
+       @repository_url, @base_ref, @base_commit,
        @branch, @path, @mode, @status, @created_at, @updated_at)
   `).run(row);
 }
@@ -51,11 +53,19 @@ export function updateWorkspaceBindings(
   id: string,
   taskId: string | null,
   flowRunId: string | null,
+  workflowRunId: string | null,
+  jobId: string | null,
+  stepId: string | null,
+  agentId: string | null,
   updatedAt: string
 ): void {
   db.prepare(
-    "UPDATE workspaces SET task_id = ?, flow_run_id = ?, updated_at = ? WHERE id = ?"
-  ).run(taskId, flowRunId, updatedAt, id);
+    `UPDATE workspaces
+     SET task_id = ?, flow_run_id = ?,
+         workflow_run_id = ?, job_id = ?, step_id = ?, agent_id = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(taskId, flowRunId, workflowRunId, jobId, stepId, agentId, updatedAt, id);
 }
 
 // ── Repository Caches ───────────────────────────────────────────────────────
