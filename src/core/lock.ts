@@ -104,6 +104,14 @@ export function unlockWorkspace(
   });
 }
 
+export function heartbeat(
+  _db: Database.Database,
+  _workspaceId: string,
+  _owner: string
+): WorkspaceLock {
+  throw new Error("not implemented");
+}
+
 export function getLock(
   db: Database.Database,
   workspaceId: string

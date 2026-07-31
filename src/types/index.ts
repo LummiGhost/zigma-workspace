@@ -37,6 +37,7 @@ export interface WorkspaceLock {
   owner: string;
   expiresAt?: string;
   acquiredAt: string;
+  lastHeartbeat?: string;
 }
 
 export interface WorkspaceDiff {

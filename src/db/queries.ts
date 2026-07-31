@@ -116,6 +116,14 @@ export function getActiveLockForWorkspace(
     .get(workspaceId) as WorkspaceLockRow | undefined;
 }
 
+export function updateLockHeartbeat(
+  _db: Database.Database,
+  _workspaceId: string,
+  _lastHeartbeat: string
+): void {
+  throw new Error("not implemented");
+}
+
 export function deleteLockForWorkspace(
   db: Database.Database,
   workspaceId: string
