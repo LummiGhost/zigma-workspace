@@ -5,6 +5,7 @@ import type {
   WorkspaceLockRow,
   WorkspaceSnapshotRow,
   WorkspaceEventRow,
+  ArtifactRow,
 } from "../types/index.js";
 
 // ── Workspaces ──────────────────────────────────────────────────────────────
@@ -131,9 +132,9 @@ export function insertWorkspaceSnapshot(
 ): void {
   db.prepare(`
     INSERT INTO workspace_snapshots
-      (id, workspace_id, kind, path, checksum, created_at)
+      (id, workspace_id, kind, created_at)
     VALUES
-      (@id, @workspace_id, @kind, @path, @checksum, @created_at)
+      (@id, @workspace_id, @kind, @created_at)
   `).run(row);
 }
 
@@ -212,4 +213,20 @@ export function listEventsForWorkspace(
       "SELECT * FROM workspace_events WHERE workspace_id = ? ORDER BY created_at ASC"
     )
     .all(workspaceId) as WorkspaceEventRow[];
+}
+
+// ── Artifacts ───────────────────────────────────────────────────────────────
+
+export function insertArtifact(
+  _db: Database.Database,
+  _row: ArtifactRow
+): void {
+  throw new Error("not implemented");
+}
+
+export function listArtifactsForSnapshot(
+  _db: Database.Database,
+  _snapshotId: string
+): ArtifactRow[] {
+  throw new Error("not implemented");
 }
