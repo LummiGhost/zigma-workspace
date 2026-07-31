@@ -148,6 +148,77 @@ export interface WorkspaceEventRow {
   workspace_id: string;
   event: string;
   data: string | null;
+  actor?: string | null;
+  created_at: string;
+}
+
+// ── Standardized event types ────────────────────────────────────────────────
+
+export const WORKSPACE_EVENT_NAMES = [
+  "workspace.created",
+  "workspace.bound",
+  "workspace.locked",
+  "workspace.unlocked",
+  "workspace.snapshot.created",
+  "workspace.diff.collected",
+  "workspace.cleaned",
+] as const;
+
+export type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number];
+
+export interface WorkspaceCreatedPayload {
+  branch: string;
+  base_commit: string;
+}
+
+export interface WorkspaceBoundPayload {
+  task_id: string | null;
+  flow_run_id: string | null;
+}
+
+export interface WorkspaceLockedPayload {
+  mode: "read" | "write";
+  owner: string;
+}
+
+export interface WorkspaceUnlockedPayload {
+  previous_owner: string;
+}
+
+export interface WorkspaceSnapshotCreatedPayload {
+  snapshot_id: string;
+  kind: string;
+  patch_path: string | null;
+  checksum: string | null;
+}
+
+export interface WorkspaceDiffCollectedPayload {
+  changed_files: number;
+  untracked_files: number;
+  patch_path: string | null;
+  patch_checksum: string | null;
+}
+
+export interface WorkspaceCleanedPayload {
+  removed: boolean;
+  message: string;
+}
+
+export type WorkspaceEventPayload =
+  | WorkspaceCreatedPayload
+  | WorkspaceBoundPayload
+  | WorkspaceLockedPayload
+  | WorkspaceUnlockedPayload
+  | WorkspaceSnapshotCreatedPayload
+  | WorkspaceDiffCollectedPayload
+  | WorkspaceCleanedPayload;
+
+export interface WorkspaceEvent {
+  id: string;
+  workspace_id: string;
+  event: WorkspaceEventName;
+  data: WorkspaceEventPayload | null;
+  actor?: string | null;
   created_at: string;
 }
 

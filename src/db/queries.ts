@@ -197,9 +197,9 @@ export function insertWorkspaceEvent(
 ): void {
   db.prepare(`
     INSERT INTO workspace_events
-      (id, workspace_id, event, data, created_at)
+      (id, workspace_id, event, data, actor, created_at)
     VALUES
-      (@id, @workspace_id, @event, @data, @created_at)
+      (@id, @workspace_id, @event, @data, @actor, @created_at)
   `).run(row);
 }
 

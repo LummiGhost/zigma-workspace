@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS workspace_events (
   workspace_id TEXT NOT NULL,
   event TEXT NOT NULL,
   data TEXT,
+  actor TEXT,
   created_at TEXT NOT NULL
 );
 

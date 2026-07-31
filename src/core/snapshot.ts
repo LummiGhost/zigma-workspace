@@ -8,28 +8,13 @@ import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceSnapshot,
-  insertWorkspaceEvent,
   listSnapshotsForWorkspace,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import { generatePatch, getHeadCommit } from "../git/index.js";
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
 }
 
 function sha256(content: string): string {
@@ -97,11 +82,11 @@ export function createSnapshot(
 
   insertWorkspaceSnapshot(db, snapshotRow);
 
-  emitEvent(db, workspaceId, "workspace.snapshot.created", {
-    snapshotId: snapId,
+  emitWorkspaceEvent(db, workspaceId, "workspace.snapshot.created", {
+    snapshot_id: snapId,
     kind: snapshotKind,
-    patchPath,
-    checksum,
+    patch_path: patchPath ?? null,
+    checksum: checksum ?? null,
   });
 
   return {
