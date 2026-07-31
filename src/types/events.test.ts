@@ -174,14 +174,14 @@ describe("payload types use snake_case keys", () => {
   it("WorkspaceCreatedPayload should use base_commit (not baseCommit)", () => {
     const p: WorkspaceCreatedPayload = { branch: "feat/x", base_commit: "abc" };
     expect(Object.keys(p)).toEqual(["branch", "base_commit"]);
-    expect((p as Record<string, unknown>).baseCommit).toBeUndefined();
+    expect("baseCommit" in p).toBe(false);
   });
 
   it("WorkspaceBoundPayload should use task_id and flow_run_id (not camelCase)", () => {
     const p: WorkspaceBoundPayload = { task_id: "t1", flow_run_id: "r1" };
     expect(Object.keys(p).sort()).toEqual(["flow_run_id", "task_id"].sort());
-    expect((p as Record<string, unknown>).taskId).toBeUndefined();
-    expect((p as Record<string, unknown>).flowRunId).toBeUndefined();
+    expect("taskId" in p).toBe(false);
+    expect("flowRunId" in p).toBe(false);
   });
 
   it("WorkspaceBoundPayload should allow null values", () => {
@@ -198,7 +198,7 @@ describe("payload types use snake_case keys", () => {
   it("WorkspaceUnlockedPayload should use previous_owner (not previousOwner)", () => {
     const p: WorkspaceUnlockedPayload = { previous_owner: "agent-1" };
     expect(Object.keys(p)).toEqual(["previous_owner"]);
-    expect((p as Record<string, unknown>).previousOwner).toBeUndefined();
+    expect("previousOwner" in p).toBe(false);
   });
 
   it("WorkspaceCleanedPayload should use removed and message", () => {
@@ -216,8 +216,8 @@ describe("payload types use snake_case keys", () => {
     expect(Object.keys(p).sort()).toEqual(
       ["checksum", "kind", "patch_path", "snapshot_id"].sort()
     );
-    expect((p as Record<string, unknown>).snapshotId).toBeUndefined();
-    expect((p as Record<string, unknown>).patchPath).toBeUndefined();
+    expect("snapshotId" in p).toBe(false);
+    expect("patchPath" in p).toBe(false);
   });
 
   it("WorkspaceSnapshotCreatedPayload should allow null patch_path and checksum", () => {
@@ -241,9 +241,9 @@ describe("payload types use snake_case keys", () => {
     expect(Object.keys(p).sort()).toEqual(
       ["changed_files", "patch_checksum", "patch_path", "untracked_files"].sort()
     );
-    expect((p as Record<string, unknown>).changedFiles).toBeUndefined();
-    expect((p as Record<string, unknown>).untrackedFiles).toBeUndefined();
-    expect((p as Record<string, unknown>).patchChecksum).toBeUndefined();
+    expect("changedFiles" in p).toBe(false);
+    expect("untrackedFiles" in p).toBe(false);
+    expect("patchChecksum" in p).toBe(false);
   });
 
   it("WorkspaceDiffCollectedPayload should allow null patch_path and patch_checksum", () => {
