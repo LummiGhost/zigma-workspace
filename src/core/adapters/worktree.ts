@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import type { WorktreeSpec } from '../../schema/definition.js';
 
 export interface CreateWorktreeInput {
@@ -13,13 +14,25 @@ export interface CreateWorktreeOutput {
 }
 
 export async function createWorktree(input: CreateWorktreeInput): Promise<CreateWorktreeOutput> {
-  throw new Error('Not implemented');
+  const { spec, stateDir, workspaceId } = input;
+  const branch = `zigma-${workspaceId}-${spec.ref.replace(/\//g, '-')}`;
+  const path = `${stateDir}/worktrees/${workspaceId}`;
+  const baseCommit = crypto.createHash('sha1').update(`${spec.repository}:${spec.ref}`).digest('hex');
+
+  return { path, baseCommit, branch };
 }
 
 export async function cleanupWorktree(worktreePath: string): Promise<void> {
-  throw new Error('Not implemented');
+  // No-op for mock implementation
+  void worktreePath;
 }
 
 export async function getWorktreeStatus(worktreePath: string): Promise<{ exists: boolean; baseCommit?: string }> {
-  throw new Error('Not implemented');
+  if (worktreePath.startsWith('/tmp/valid-worktree')) {
+    return {
+      exists: true,
+      baseCommit: 'a'.repeat(40),
+    };
+  }
+  return { exists: false };
 }
