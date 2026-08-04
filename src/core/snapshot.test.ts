@@ -1,5 +1,66 @@
-import { describe, it, expect } from "vitest";
-import type { WorkspaceSnapshot } from "../types/index.js";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import type { WorkspaceSnapshot, ZigmaWorkspaceConfig } from "../types/index.js";
+import { openDb, closeDb } from "../db/index.js";
+import { insertWorkspace } from "../db/queries.js";
+import { createSnapshot } from "./snapshot.js";
+
+vi.mock("../git/index.js", () => ({
+  getHeadCommit: vi.fn(() => "head123"),
+  generatePatch: vi.fn(() => "diff --git a/a b/a\n"),
+}));
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  closeDb();
+  for (const tempDir of tempDirs.splice(0)) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+describe("createSnapshot integration", () => {
+  it("inserts the parent snapshot before its artifacts", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-snapshot-test-"));
+    tempDirs.push(tempDir);
+    const workspacePath = path.join(tempDir, "workspace");
+    fs.mkdirSync(workspacePath);
+    const config: ZigmaWorkspaceConfig = {
+      stateDir: tempDir,
+      repoCacheDir: path.join(tempDir, "repos"),
+      workspacesDir: path.join(tempDir, "workspaces"),
+      snapshotsDir: path.join(tempDir, "snapshots"),
+      logsDir: path.join(tempDir, "logs"),
+      dbPath: path.join(tempDir, "registry.db"),
+    };
+    const db = openDb(config);
+    insertWorkspace(db, {
+      id: "ws_snapshot",
+      project_id: null,
+      task_id: null,
+      flow_run_id: null,
+      repository_url: "https://example.test/repo.git",
+      base_ref: "main",
+      base_commit: "base123",
+      branch: "feature",
+      path: workspacePath,
+      mode: "writable",
+      status: "active",
+      created_at: "2024-01-01T00:00:00.000Z",
+      updated_at: "2024-01-01T00:00:00.000Z",
+    });
+
+    const snapshot = createSnapshot(db, config, "ws_snapshot");
+    const artifactCount = db
+      .prepare("SELECT COUNT(*) AS count FROM artifacts WHERE snapshot_id = ?")
+      .get(snapshot.id) as { count: number };
+
+    expect(snapshot.kind).toBe("diff");
+    expect(artifactCount.count).toBe(2);
+  });
+});
 
 describe("createSnapshot return type (after Artifact separation)", () => {
   it("should return a WorkspaceSnapshot without path or checksum top-level fields", () => {

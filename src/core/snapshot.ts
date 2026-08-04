@@ -45,6 +45,26 @@ export function createSnapshot(
   const ts = now();
   const headCommit = getHeadCommit(row.path);
 
+  // Collect the patch before inserting anything so the snapshot kind is final.
+  let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
+  let patch: string | null = null;
+  if (fs.existsSync(row.path)) {
+    const generatedPatch = generatePatch(row.path, row.base_commit);
+    if (generatedPatch.trim()) {
+      patch = generatedPatch;
+      snapshotKind = "diff";
+    }
+  }
+
+  // The parent snapshot must exist before artifacts because artifacts.snapshot_id
+  // is protected by a foreign key.
+  insertWorkspaceSnapshot(db, {
+    id: snapId,
+    workspace_id: workspaceId,
+    kind: snapshotKind,
+    created_at: ts,
+  });
+
   // Collect metadata as a metadata artifact
   const metadata = {
     snapshot_id: snapId,
@@ -70,31 +90,17 @@ export function createSnapshot(
     `${snapId}.metadata.json`,
   );
 
-  // Collect diff as a patch artifact
-  let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
-
-  if (fs.existsSync(row.path)) {
-    const patch = generatePatch(row.path, row.base_commit);
-    if (patch.trim()) {
-      createArtifact(
-        db,
-        config,
-        snapId,
-        workspaceId,
-        "patch",
-        patch,
-        `${snapId}.patch`,
-      );
-      snapshotKind = "diff";
-    }
+  if (patch !== null) {
+    createArtifact(
+      db,
+      config,
+      snapId,
+      workspaceId,
+      "patch",
+      patch,
+      `${snapId}.patch`,
+    );
   }
-
-  insertWorkspaceSnapshot(db, {
-    id: snapId,
-    workspace_id: workspaceId,
-    kind: snapshotKind,
-    created_at: ts,
-  });
 
   emitEvent(db, workspaceId, "workspace.snapshot.created", {
     snapshotId: snapId,
