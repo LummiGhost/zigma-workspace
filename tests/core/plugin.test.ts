@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   loadPlugin,
   loadPlugins,
@@ -13,6 +16,25 @@ const mockDefinition = {
   metadata: { name: 'test' },
   spec: { type: 'worktree', repository: 'r', ref: 'main' },
 } as const;
+
+let pluginDir: string;
+let validPluginPath: string;
+let unnamedPluginPath: string;
+
+beforeAll(() => {
+  pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zigma-plugin-test-'));
+  validPluginPath = path.join(pluginDir, 'valid.mjs');
+  unnamedPluginPath = path.join(pluginDir, 'unnamed.mjs');
+  fs.writeFileSync(validPluginPath, 'export default { name: "fixture-plugin" };', 'utf-8');
+  fs.writeFileSync(unnamedPluginPath, 'export default { version: "1.0.0" };', 'utf-8');
+  for (const name of ['a', 'b', 'c']) {
+    fs.writeFileSync(path.join(pluginDir, `${name}.mjs`), `export default { name: "${name}" };`, 'utf-8');
+  }
+});
+
+afterAll(() => {
+  fs.rmSync(pluginDir, { recursive: true, force: true });
+});
 
 describe('Plugin interface (compile-time)', () => {
   it('should allow a minimal plugin (only name)', () => {
@@ -59,14 +81,14 @@ describe('PluginValidationResult', () => {
 
 describe('loadPlugin', () => {
   it('should load a plugin from a file path', async () => {
-    const result = await loadPlugin('/path/to/plugin.js');
+    const result = await loadPlugin(validPluginPath);
     expect(result).toBeDefined();
     expect(typeof result.plugin.name).toBe('string');
     expect(typeof result.path).toBe('string');
   });
 
   it('should return the loaded plugin path in the result', async () => {
-    const pluginPath = '/opt/plugins/my-plugin.js';
+    const pluginPath = validPluginPath;
     const result = await loadPlugin(pluginPath);
     expect(result.path).toBe(pluginPath);
   });
@@ -76,7 +98,7 @@ describe('loadPlugin', () => {
   });
 
   it('should throw for a plugin that does not export a name', async () => {
-    await expect(loadPlugin('/path/to/unnamed-plugin.js')).rejects.toThrow();
+    await expect(loadPlugin(unnamedPluginPath)).rejects.toThrow();
   });
 
   it('should throw for a non-JS module', async () => {
@@ -84,19 +106,19 @@ describe('loadPlugin', () => {
   });
 
   it('should handle relative paths', async () => {
-    const result = await loadPlugin('./plugins/custom.js');
+    const result = await loadPlugin(path.relative(process.cwd(), validPluginPath));
     expect(result).toBeDefined();
   });
 
   it('should handle absolute paths', async () => {
-    const result = await loadPlugin('/absolute/path/to/plugin.js');
+    const result = await loadPlugin(validPluginPath);
     expect(result).toBeDefined();
   });
 });
 
 describe('loadPlugins', () => {
   it('should load multiple plugins from a list of paths', async () => {
-    const paths = ['/plugins/a.js', '/plugins/b.js', '/plugins/c.js'];
+    const paths = ['a', 'b', 'c'].map((name) => path.join(pluginDir, `${name}.mjs`));
     const results = await loadPlugins(paths);
     expect(results).toHaveLength(3);
     for (const r of results) {
@@ -111,12 +133,12 @@ describe('loadPlugins', () => {
   });
 
   it('should throw if any plugin fails to load', async () => {
-    const paths = ['/plugins/valid.js', '/plugins/broken.js'];
+    const paths = [validPluginPath, path.join(pluginDir, 'missing.mjs')];
     await expect(loadPlugins(paths)).rejects.toThrow();
   });
 
   it('should preserve the order of loaded plugins', async () => {
-    const paths = ['/first.js', '/second.js', '/third.js'];
+    const paths = ['a', 'b', 'c'].map((name) => path.join(pluginDir, `${name}.mjs`));
     const results = await loadPlugins(paths);
     expect(results[0].path).toBe(paths[0]);
     expect(results[1].path).toBe(paths[1]);

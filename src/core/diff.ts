@@ -44,11 +44,20 @@ export interface PathFilter {
   deniedPaths?: string[];
 }
 
-function filterFiles(files: string[], filter: PathFilter): string[] {
+export function filterFiles(files: string[], filter: PathFilter): string[] {
   let result = files;
 
   if (filter.allowedPaths && filter.allowedPaths.length > 0) {
-    result = result.filter((f) => filter.allowedPaths!.some((p) => f.startsWith(p)));
+    const allowed = filter.allowedPaths
+      .map((candidate) => path.posix.normalize(candidate.replace(/\\/g, "/")).replace(/^\.\//, "").replace(/\/$/, ""))
+      .filter((candidate) => candidate !== "" && candidate !== ".." && !candidate.startsWith("../") && !path.posix.isAbsolute(candidate));
+    result = result.filter((file) => {
+      const normalized = path.posix.normalize(file.replace(/\\/g, "/")).replace(/^\.\//, "");
+      if (normalized === ".." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+        return false;
+      }
+      return allowed.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
+    });
   }
 
   if (filter.deniedPaths && filter.deniedPaths.length > 0) {

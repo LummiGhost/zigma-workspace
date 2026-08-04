@@ -42,6 +42,19 @@ describe('createChildWorkspace', () => {
     expect(result.path).toContain('subdir');
   });
 
+  it('should reject child paths that escape the parent workspace', async () => {
+    await expect(
+      createChildWorkspace({
+        ...validInput,
+        spec: {
+          type: 'workspace',
+          workspaceRef: 'ws_parent-001',
+          paths: ['../../../outside'],
+        },
+      }),
+    ).rejects.toThrow(/must stay within parent workspace/);
+  });
+
   it('should work with env vars', async () => {
     const result = await createChildWorkspace({
       ...validInput,

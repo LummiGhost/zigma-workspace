@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { WorkspaceDefinition } from '../schema/definition.js';
 
 export interface Plugin {
@@ -27,35 +28,24 @@ export async function loadPlugin(pluginPath: string): Promise<PluginLoadResult> 
     throw new Error(`Plugin path must be a JavaScript file, got: ${pluginPath}`);
   }
 
-  // Known test failure paths
-  if (resolved.includes('nonexistent') || resolved.includes('broken')) {
+  if (!fs.existsSync(resolved)) {
     throw new Error(`Plugin file not found: ${resolved}`);
   }
-  if (resolved.includes('unnamed-plugin')) {
+
+  const url = pathToFileURL(resolved).href;
+  const mod = await import(url);
+
+  if (typeof mod !== 'object' || mod === null) {
+    throw new Error(`Plugin at ${resolved} did not export an object`);
+  }
+
+  const plugin = (mod as Record<string, unknown>).default ?? mod;
+
+  if (typeof plugin !== 'object' || plugin === null || typeof (plugin as Plugin).name !== 'string') {
     throw new Error(`Plugin at ${resolved} must export an object with a 'name' property`);
   }
 
-  // Try dynamic import for real files on disk
-  if (fs.existsSync(resolved)) {
-    const url = pathToFileURL(resolved);
-    const mod = await import(url);
-
-    if (typeof mod !== 'object' || mod === null) {
-      throw new Error(`Plugin at ${resolved} did not export an object`);
-    }
-
-    const plugin = (mod as Record<string, unknown>).default ?? mod;
-
-    if (typeof plugin !== 'object' || plugin === null || typeof (plugin as Plugin).name !== 'string') {
-      throw new Error(`Plugin at ${resolved} must export an object with a 'name' property`);
-    }
-
-    return { plugin: plugin as Plugin, path: pluginPath };
-  }
-
-  // Fallback: generate a mock plugin for test paths
-  const mockName = path.basename(resolved, path.extname(resolved));
-  return { plugin: { name: mockName }, path: pluginPath };
+  return { plugin: plugin as Plugin, path: pluginPath };
 }
 
 export async function loadPlugins(pluginPaths: string[]): Promise<PluginLoadResult[]> {
@@ -69,12 +59,4 @@ export async function loadPlugins(pluginPaths: string[]): Promise<PluginLoadResu
     results.push(result);
   }
   return results;
-}
-
-function pathToFileURL(filePath: string): string {
-  let p = filePath.replace(/\\/g, '/');
-  if (!p.startsWith('/')) {
-    p = '/' + p;
-  }
-  return 'file://' + p;
 }

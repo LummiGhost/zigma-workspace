@@ -37,7 +37,7 @@ export function validateDefinition(data: unknown): ValidationResult {
   const def = data as Record<string, unknown>;
 
   // apiVersion
-  if (!def.apiVersion) {
+  if (def.apiVersion === null || def.apiVersion === undefined) {
     errors.push(error('apiVersion', 'apiVersion is required', 'MISSING_FIELD'));
   } else if (def.apiVersion !== VALID_API_VERSION) {
     errors.push(
@@ -46,7 +46,7 @@ export function validateDefinition(data: unknown): ValidationResult {
   }
 
   // kind
-  if (!def.kind) {
+  if (def.kind === null || def.kind === undefined) {
     errors.push(error('kind', 'kind is required', 'MISSING_FIELD'));
   } else if (def.kind !== VALID_KIND) {
     errors.push(error('kind', `kind must be '${VALID_KIND}'`, 'INVALID_VALUE'));

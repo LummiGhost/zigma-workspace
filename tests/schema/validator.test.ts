@@ -97,6 +97,17 @@ describe('validateDefinition', () => {
     expect(result.errors.some((e: ValidationError) => e.message.toLowerCase().includes('apiversion'))).toBe(true);
   });
 
+  it('should classify empty apiVersion and kind as invalid values, not missing fields', () => {
+    const result = validateDefinition({
+      apiVersion: '',
+      kind: '',
+      metadata: { name: 'test' },
+      spec: { type: 'worktree', repository: 'repo', ref: 'main' },
+    });
+    expect(result.errors.find((entry) => entry.path === 'apiVersion')?.code).toBe('INVALID_VALUE');
+    expect(result.errors.find((entry) => entry.path === 'kind')?.code).toBe('INVALID_VALUE');
+  });
+
   it('should reject missing kind', () => {
     const result = validateDefinition({
       apiVersion: 'zigma.ai/v1alpha1',
