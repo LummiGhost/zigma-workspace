@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { v4 as uuidv4 } from "uuid";
 import {
   insertWorkspaceEvent,
   listEventsForWorkspace,
 } from "./queries.js";
 import type { WorkspaceEventRow } from "../types/index.js";
+import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { closeDb, openDb } from "./index.js";
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
@@ -29,6 +34,47 @@ function createTestDb(): Database.Database {
 function now(): string {
   return new Date().toISOString();
 }
+
+describe("workspace_events schema migration", () => {
+  it("adds actor to an existing registry database", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-events-migration-"));
+    const dbPath = path.join(tempDir, "registry.db");
+    const legacyDb = new Database(dbPath);
+    legacyDb.exec(`
+      CREATE TABLE workspace_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        data TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+    legacyDb.close();
+    const config: ZigmaWorkspaceConfig = {
+      stateDir: tempDir,
+      repoCacheDir: path.join(tempDir, "repos"),
+      workspacesDir: path.join(tempDir, "workspaces"),
+      snapshotsDir: path.join(tempDir, "snapshots"),
+      logsDir: path.join(tempDir, "logs"),
+      dbPath,
+    };
+
+    const db = openDb(config);
+    const columns = db.pragma("table_info(workspace_events)") as Array<{ name: string }>;
+    expect(columns.some((column) => column.name === "actor")).toBe(true);
+    expect(() => insertWorkspaceEvent(db, {
+      id: "evt_migrated",
+      workspace_id: "ws_migrated",
+      event: "workspace.created",
+      actor: "migration-test",
+      data: null,
+      created_at: now(),
+    })).not.toThrow();
+
+    closeDb(config);
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+});
 
 // ── WorkspaceEventRow with actor field ──────────────────────────────────────
 

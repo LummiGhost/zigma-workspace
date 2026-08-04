@@ -199,8 +199,8 @@ export function bindRun(
   updateWorkspaceStatus(db, input.workspaceId, "active", ts);
 
   emitWorkspaceEvent(db, input.workspaceId, "workspace.bound", {
-    task_id: input.taskId ?? null,
-    flow_run_id: input.flowRunId ?? null,
+    task_id: input.taskId ?? row.task_id ?? null,
+    flow_run_id: input.flowRunId ?? row.flow_run_id ?? null,
   });
 
   // Update manifest on disk

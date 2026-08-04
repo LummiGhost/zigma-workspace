@@ -65,6 +65,16 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
+function migrateWorkspaceEventActor(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    const columns = db.pragma("table_info(workspace_events)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "actor")) {
+      db.exec("ALTER TABLE workspace_events ADD COLUMN actor TEXT");
+    }
+  });
+  migrate();
+}
+
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const existing = _dbMap.get(config.dbPath);
   if (existing) return existing;
@@ -72,6 +82,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  migrateWorkspaceEventActor(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }
