@@ -19,7 +19,7 @@
     "check": "npm run typecheck && npm run build && npm run test",
     "dev": "tsx src/cli/index.ts",
     "start": "node dist/cli/index.js",
-    "test": "npm run test:smoke",
+    "test": "npm run test:unit && npm run test:smoke",
     "test:unit": "vitest run",
     "test:smoke": "node dist/cli/index.js --help",
     "prepack": "npm run build"
