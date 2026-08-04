@@ -129,7 +129,7 @@ describe("updateLockHeartbeat", () => {
     insertWorkspaceLock(db, row);
 
     const newHeartbeat = "2025-06-15T12:00:00Z";
-    updateLockHeartbeat(db, "ws_test", newHeartbeat);
+    expect(updateLockHeartbeat(db, "ws_test", newHeartbeat)).toBe(true);
 
     const result = db
       .prepare("SELECT last_heartbeat FROM workspace_locks WHERE workspace_id = ?")
@@ -139,8 +139,8 @@ describe("updateLockHeartbeat", () => {
     expect(result!.last_heartbeat).toBe(newHeartbeat);
   });
 
-  it("should not throw when no lock exists for the workspace (idempotent)", () => {
-    expect(() => updateLockHeartbeat(db, "ws_none", "2025-06-15T12:00:00Z")).not.toThrow();
+  it("should report when no active lock was updated", () => {
+    expect(updateLockHeartbeat(db, "ws_none", "2025-06-15T12:00:00Z")).toBe(false);
   });
 });
 

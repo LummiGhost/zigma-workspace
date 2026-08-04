@@ -10,6 +10,7 @@ import {
   updateWorkspaceStatus,
   insertWorkspaceEvent,
   updateLockHeartbeat,
+  deleteExpiredLocksForWorkspace,
 } from "../db/queries.js";
 
 function now(): string {
@@ -48,45 +49,40 @@ export function lockWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  const existingLock = getActiveLockForWorkspace(db, workspaceId);
-  if (existingLock) {
-    // getActiveLockForWorkspace filters expired locks at the DB level,
-    // but we also check here for callers that bypass the DB (e.g. mocks).
-    if (!isExpired(existingLock.expires_at)) {
+  const acquire = db.transaction((): WorkspaceLock => {
+    const existingLock = getActiveLockForWorkspace(db, workspaceId);
+    if (existingLock && !isExpired(existingLock.expires_at)) {
       throw new ZigmaError(
         "WORKSPACE_LOCK_CONFLICT",
         `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
         { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
       );
     }
-    // Expired lock — reclaim it by proceeding to acquisition
-  }
-
-  const lockId = `lock_${uuidv4()}`;
-  const acquiredAt = now();
-
-  insertWorkspaceLock(db, {
-    id: lockId,
-    workspace_id: workspaceId,
-    mode,
-    owner,
-    expires_at: expiresAt ?? null,
-    acquired_at: acquiredAt,
-    last_heartbeat: acquiredAt,
+    const acquiredAt = now();
+    deleteExpiredLocksForWorkspace(db, workspaceId, acquiredAt);
+    const lockId = `lock_${uuidv4()}`;
+    insertWorkspaceLock(db, {
+      id: lockId,
+      workspace_id: workspaceId,
+      mode,
+      owner,
+      expires_at: expiresAt ?? null,
+      acquired_at: acquiredAt,
+      last_heartbeat: acquiredAt,
+    });
+    updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
+    emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
+    return {
+      id: lockId,
+      workspaceId,
+      mode,
+      owner,
+      expiresAt,
+      acquiredAt,
+      lastHeartbeat: acquiredAt,
+    };
   });
-
-  updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
-  emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
-
-  return {
-    id: lockId,
-    workspaceId,
-    mode,
-    owner,
-    expiresAt,
-    acquiredAt,
-    lastHeartbeat: acquiredAt,
-  };
+  return acquire.immediate();
 }
 
 export function unlockWorkspace(
@@ -142,7 +138,13 @@ export function heartbeat(
   }
 
   const heartbeatTime = now();
-  updateLockHeartbeat(db, workspaceId, heartbeatTime);
+  if (!updateLockHeartbeat(db, workspaceId, heartbeatTime)) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Lock expired before heartbeat for workspace ${workspaceId}`,
+      { workspaceId },
+    );
+  }
 
   return {
     id: activeLock.id,

@@ -6,6 +6,7 @@ vi.mock("../db/queries.js", () => ({
   insertWorkspaceLock: vi.fn(),
   getActiveLockForWorkspace: vi.fn(),
   deleteLockForWorkspace: vi.fn(),
+  deleteExpiredLocksForWorkspace: vi.fn(),
   releaseLockForWorkspace: vi.fn(),
   updateWorkspaceStatus: vi.fn(),
   insertWorkspaceEvent: vi.fn(),
@@ -20,7 +21,13 @@ let db: Database.Database;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  db = {} as Database.Database;
+  const transaction = vi.fn((fn: () => unknown) => {
+    const wrapped = vi.fn(fn) as unknown as ReturnType<Database.Database["transaction"]>;
+    wrapped.immediate = wrapped;
+    return wrapped;
+  });
+  db = { transaction } as unknown as Database.Database;
+  vi.mocked(queries.updateLockHeartbeat).mockReturnValue(true);
 });
 
 // ── lockWorkspace ───────────────────────────────────────────────────────────
@@ -87,6 +94,11 @@ describe("lockWorkspace", () => {
       const result = lockWorkspace(db, "ws_1", "write", "new-owner", "2026-06-01T00:00:00Z");
 
       expect(result.owner).toBe("new-owner");
+      expect(queries.deleteExpiredLocksForWorkspace).toHaveBeenCalledWith(
+        db,
+        "ws_1",
+        expect.any(String),
+      );
       expect(queries.insertWorkspaceLock).toHaveBeenCalledTimes(1);
     });
 
@@ -217,8 +229,11 @@ describe("unlockWorkspace", () => {
 
       unlockWorkspace(db, "ws_1");
 
-      // With lease-based locking, release should be a soft-delete (not DELETE)
-      expect(queries.deleteLockForWorkspace).not.toHaveBeenCalled();
+      expect(queries.releaseLockForWorkspace).toHaveBeenCalledWith(
+        db,
+        "ws_1",
+        expect.any(String),
+      );
     });
 
     it("should restore workspace status to active after unlock", () => {

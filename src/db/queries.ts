@@ -123,10 +123,13 @@ export function updateLockHeartbeat(
   db: Database.Database,
   workspaceId: string,
   lastHeartbeat: string
-): void {
-  db.prepare(
-    "UPDATE workspace_locks SET last_heartbeat = ? WHERE workspace_id = ?"
-  ).run(lastHeartbeat, workspaceId);
+): boolean {
+  const result = db.prepare(
+    `UPDATE workspace_locks
+     SET last_heartbeat = ?
+     WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, workspaceId, lastHeartbeat);
+  return result.changes > 0;
 }
 
 export function releaseLockForWorkspace(
@@ -135,8 +138,18 @@ export function releaseLockForWorkspace(
   releasedAt: string
 ): void {
   db.prepare(
-    "UPDATE workspace_locks SET expires_at = ? WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
-  ).run(releasedAt, workspaceId, releasedAt);
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+  ).run(workspaceId, releasedAt);
+}
+
+export function deleteExpiredLocksForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  expiredAt: string
+): void {
+  db.prepare(
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+  ).run(workspaceId, expiredAt);
 }
 
 export function deleteLockForWorkspace(
