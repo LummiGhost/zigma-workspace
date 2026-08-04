@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { transition } from "./state-machine.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   getWorkspaceById,
   updateWorkspaceStatus,
@@ -101,7 +101,13 @@ export function cleanupWorkspace(
   }
 
   // Transition to CLEANED through the state machine
-  const cleaned = transition(row.status as Parameters<typeof transition>[0], "CLEANED");
+  if (!isWorkspaceState(row.status)) {
+    throw new ZigmaError("INVALID_INPUT", `Unknown workspace state: "${row.status}"`, {
+      workspaceId,
+      status: row.status,
+    });
+  }
+  const cleaned = transition(row.status, "CLEANED");
   updateWorkspaceStatus(db, workspaceId, cleaned, now());
   emitEvent(db, workspaceId, "workspace.cleaned", { removed, message });
 

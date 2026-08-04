@@ -14,6 +14,10 @@ export const WorkspaceStates = [
 
 export type WorkspaceState = (typeof WorkspaceStates)[number];
 
+export function isWorkspaceState(value: string): value is WorkspaceState {
+  return (WorkspaceStates as readonly string[]).includes(value);
+}
+
 export const TRANSITIONS: Record<WorkspaceState, readonly WorkspaceState[]> = {
   CREATED: ["PREPARING", "FAILED"],
   PREPARING: ["READY", "FAILED"],
@@ -30,6 +34,13 @@ export function transition(
   current: WorkspaceState,
   next: WorkspaceState,
 ): WorkspaceState {
+  if (!isWorkspaceState(current)) {
+    throw new ZigmaError(
+      "INVALID_INPUT",
+      `Unknown workspace state: "${String(current)}"`,
+      { current },
+    );
+  }
   const allowed = TRANSITIONS[current];
   if (!allowed.includes(next)) {
     throw new ZigmaError(

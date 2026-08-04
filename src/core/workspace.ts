@@ -12,7 +12,7 @@ import type {
   RepositoryCacheRow,
 } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { transition } from "./state-machine.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   insertWorkspace,
   getWorkspaceById,
@@ -215,7 +215,13 @@ export function bindRun(
     input.flowRunId ?? row.flow_run_id,
     ts
   );
-  const running = transition("READY", "RUNNING");
+  if (!isWorkspaceState(row.status)) {
+    throw new ZigmaError("INVALID_INPUT", `Unknown workspace state: "${row.status}"`, {
+      workspaceId: input.workspaceId,
+      status: row.status,
+    });
+  }
+  const running = transition(row.status, "RUNNING");
   updateWorkspaceStatus(db, input.workspaceId, running, ts);
 
   emitEvent(db, input.workspaceId, "workspace.bound", {

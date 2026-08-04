@@ -3,6 +3,7 @@ import {
   WorkspaceStates,
   TRANSITIONS,
   transition,
+  isWorkspaceState,
   migrateLegacyStatus,
   isTerminal,
 } from "./state-machine.js";
@@ -11,6 +12,14 @@ import type { WorkspaceState } from "./state-machine.js";
 // ── WorkspaceState union ──────────────────────────────────────────────────────
 
 describe("WorkspaceState", () => {
+  it("rejects unknown runtime values", () => {
+    expect(isWorkspaceState("READY")).toBe(true);
+    expect(isWorkspaceState("prepared")).toBe(false);
+    expect(() => transition("prepared" as WorkspaceState, "READY")).toThrow(
+      'Unknown workspace state: "prepared"',
+    );
+  });
+
   it("should include all expected lifecycle states", () => {
     const expected = [
       "CREATED",
