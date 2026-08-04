@@ -86,14 +86,11 @@ describe("Workspace queries - workflow execution context", () => {
         agent_id: "agent_claude_001",
       };
       insertWorkspace(db, row as Parameters<typeof insertWorkspace>[1]);
-      const retrieved = getWorkspaceById(db, "ws_wf_001") as Record<
-        string,
-        unknown
-      >;
-      expect(retrieved.workflow_run_id).toBe("wr_prod_001");
-      expect(retrieved.job_id).toBe("job_build_001");
-      expect(retrieved.step_id).toBe("step_compile_001");
-      expect(retrieved.agent_id).toBe("agent_claude_001");
+      const retrieved = getWorkspaceById(db, "ws_wf_001");
+      expect(retrieved?.workflow_run_id).toBe("wr_prod_001");
+      expect(retrieved?.job_id).toBe("job_build_001");
+      expect(retrieved?.step_id).toBe("step_compile_001");
+      expect(retrieved?.agent_id).toBe("agent_claude_001");
     });
 
     it("should accept null workflow context fields", () => {
@@ -106,33 +103,30 @@ describe("Workspace queries - workflow execution context", () => {
         agent_id: null,
       };
       insertWorkspace(db, row as Parameters<typeof insertWorkspace>[1]);
-      const retrieved = getWorkspaceById(db, "ws_wf_002") as Record<
-        string,
-        unknown
-      >;
-      expect(retrieved.workflow_run_id).toBeNull();
-      expect(retrieved.job_id).toBeNull();
-      expect(retrieved.step_id).toBeNull();
-      expect(retrieved.agent_id).toBeNull();
+      const retrieved = getWorkspaceById(db, "ws_wf_002");
+      expect(retrieved?.workflow_run_id).toBeNull();
+      expect(retrieved?.job_id).toBeNull();
+      expect(retrieved?.step_id).toBeNull();
+      expect(retrieved?.agent_id).toBeNull();
     });
   });
 
   describe("getWorkspaceById", () => {
     it("should return rows with workflowRunId, jobId, stepId, and agentId", () => {
       const id = "ws_wf_001";
-      const retrieved = getWorkspaceById(db, id) as Record<string, unknown>;
+      const retrieved = getWorkspaceById(db, id);
       expect(retrieved).toBeDefined();
       expect(retrieved).toHaveProperty("workflow_run_id");
       expect(retrieved).toHaveProperty("job_id");
       expect(retrieved).toHaveProperty("step_id");
       expect(retrieved).toHaveProperty("agent_id");
-      expect(retrieved.workflow_run_id).toBe("wr_prod_001");
+      expect(retrieved?.workflow_run_id).toBe("wr_prod_001");
     });
   });
 
   describe("listWorkspaces", () => {
     it("should return rows with workflow context fields", () => {
-      const workspaces = listWorkspaces(db) as Record<string, unknown>[];
+      const workspaces = listWorkspaces(db);
       expect(workspaces.length).toBeGreaterThan(0);
       for (const ws of workspaces) {
         expect(ws).toHaveProperty("workflow_run_id");
@@ -145,7 +139,7 @@ describe("Workspace queries - workflow execution context", () => {
 
   describe("updateWorkspaceBindings", () => {
     it("should update workflowRunId, jobId, stepId, and agentId", () => {
-      (updateWorkspaceBindings as Function)(
+      updateWorkspaceBindings(
         db,
         "ws_wf_001",
         null,
@@ -157,18 +151,15 @@ describe("Workspace queries - workflow execution context", () => {
         "2025-01-02T00:00:00.000Z"
       );
 
-      const retrieved = getWorkspaceById(db, "ws_wf_001") as Record<
-        string,
-        unknown
-      >;
-      expect(retrieved.workflow_run_id).toBe("wr_prod_002");
-      expect(retrieved.job_id).toBe("job_build_002");
-      expect(retrieved.step_id).toBe("step_compile_002");
-      expect(retrieved.agent_id).toBe("agent_claude_002");
+      const retrieved = getWorkspaceById(db, "ws_wf_001");
+      expect(retrieved?.workflow_run_id).toBe("wr_prod_002");
+      expect(retrieved?.job_id).toBe("job_build_002");
+      expect(retrieved?.step_id).toBe("step_compile_002");
+      expect(retrieved?.agent_id).toBe("agent_claude_002");
     });
 
     it("should preserve existing task_id and flow_run_id when updating workflow context fields", () => {
-      (updateWorkspaceBindings as Function)(
+      updateWorkspaceBindings(
         db,
         "ws_wf_001",
         "task_keep",
@@ -180,18 +171,15 @@ describe("Workspace queries - workflow execution context", () => {
         "2025-01-03T00:00:00.000Z"
       );
 
-      const retrieved = getWorkspaceById(db, "ws_wf_001") as Record<
-        string,
-        unknown
-      >;
-      expect(retrieved.task_id).toBe("task_keep");
-      expect(retrieved.flow_run_id).toBe("flow_keep");
-      expect(retrieved.workflow_run_id).toBe("wr_prod_003");
-      expect(retrieved.job_id).toBe("job_build_003");
+      const retrieved = getWorkspaceById(db, "ws_wf_001");
+      expect(retrieved?.task_id).toBe("task_keep");
+      expect(retrieved?.flow_run_id).toBe("flow_keep");
+      expect(retrieved?.workflow_run_id).toBe("wr_prod_003");
+      expect(retrieved?.job_id).toBe("job_build_003");
     });
 
     it("should allow null values for workflow context fields", () => {
-      (updateWorkspaceBindings as Function)(
+      updateWorkspaceBindings(
         db,
         "ws_wf_001",
         null,
@@ -203,14 +191,11 @@ describe("Workspace queries - workflow execution context", () => {
         "2025-01-04T00:00:00.000Z"
       );
 
-      const retrieved = getWorkspaceById(db, "ws_wf_001") as Record<
-        string,
-        unknown
-      >;
-      expect(retrieved.workflow_run_id).toBeNull();
-      expect(retrieved.job_id).toBeNull();
-      expect(retrieved.step_id).toBeNull();
-      expect(retrieved.agent_id).toBeNull();
+      const retrieved = getWorkspaceById(db, "ws_wf_001");
+      expect(retrieved?.workflow_run_id).toBeNull();
+      expect(retrieved?.job_id).toBeNull();
+      expect(retrieved?.step_id).toBeNull();
+      expect(retrieved?.agent_id).toBeNull();
     });
   });
 });

@@ -227,7 +227,6 @@ export function bindRun(
     input.agentId ?? row.agent_id,
     ts
   );
-  updateWorkspaceStatus(db, input.workspaceId, "active", ts);
 
   emitEvent(db, input.workspaceId, "workspace.bound", {
     taskId: input.taskId,

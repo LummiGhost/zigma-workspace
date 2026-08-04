@@ -117,7 +117,6 @@ export interface ZigmaWorkspaceConfig {
 }
 
 export interface WorkspaceRow {
-  [key: string]: unknown;
   id: string;
   project_id: string | null;
   task_id: string | null;
