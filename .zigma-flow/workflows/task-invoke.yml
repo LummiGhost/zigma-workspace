@@ -180,10 +180,10 @@ jobs:
             - code
       - id: verify-red
         type: script
-        run: "npm run test:unit || true"
+        run: "npm run test:unit"
         env:
           CI: "true"
-        failure_policy: continue   # tests are expected to FAIL here (red phase)
+        failure_policy: expect_failure
 
   # ─────────────────────────────────────────────────────────────────────────
   # Step 8: Create draft PR (runs exactly once, before the implement loop)
@@ -257,10 +257,6 @@ jobs:
           pr_url: "${{ jobs.create-draft-pr.outputs.pr_url }}"
         outputs:
           verdict: {}
-          findings: {}
-          checked_files: {}
-          validation_evidence: {}
-          non_blocking_improvements: {}
         returns:
           status:
             values:
