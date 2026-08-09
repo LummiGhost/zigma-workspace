@@ -203,6 +203,21 @@ export function insertWorkspaceEvent(
   `).run(row);
 }
 
+export function migrateStatusColumn(db: Database.Database): void {
+  db.exec(`
+    UPDATE workspaces SET status = CASE status
+      WHEN 'created'  THEN 'CREATED'
+      WHEN 'prepared' THEN 'PREPARING'
+      WHEN 'locked'   THEN 'READY'
+      WHEN 'active'   THEN 'RUNNING'
+      WHEN 'archived' THEN 'ARCHIVED'
+      WHEN 'cleaned'  THEN 'CLEANED'
+      WHEN 'failed'   THEN 'FAILED'
+      ELSE status
+    END
+  `);
+}
+
 export function listEventsForWorkspace(
   db: Database.Database,
   workspaceId: string
