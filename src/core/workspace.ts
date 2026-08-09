@@ -12,6 +12,7 @@ import type {
   RepositoryCacheRow,
 } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   insertWorkspace,
   getWorkspaceById,
@@ -166,7 +167,7 @@ export function createWorkspace(
     branch,
     path: workspacePath,
     mode,
-    status: "created",
+    status: "CREATED",
     created_at: ts,
     updated_at: ts,
   };
@@ -196,8 +197,11 @@ export function createWorkspace(
   const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 
-  // Mark as prepared
-  updateWorkspaceStatus(db, wsId, "prepared", now());
+  // Transition through state machine: CREATED → PREPARING → READY
+  const preparing = transition("CREATED", "PREPARING");
+  updateWorkspaceStatus(db, wsId, preparing, now());
+  const ready = transition(preparing, "READY");
+  updateWorkspaceStatus(db, wsId, ready, now());
   emitEvent(db, wsId, "workspace.created", { branch, baseCommit });
 
   const finalRow = getWorkspaceById(db, wsId);

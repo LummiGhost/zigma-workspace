@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { migrateStatusColumn } from "./queries.js";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -17,7 +18,7 @@ CREATE TABLE IF NOT EXISTS workspaces (
   branch TEXT NOT NULL,
   path TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'writable',
-  status TEXT NOT NULL DEFAULT 'created',
+  status TEXT NOT NULL DEFAULT 'CREATED',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );

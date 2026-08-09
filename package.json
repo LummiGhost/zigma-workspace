@@ -22,6 +22,7 @@
     "test": "npm run test:unit && npm run test:smoke",
     "test:unit": "vitest run",
     "test:smoke": "node dist/cli/index.js --help",
+    "test:unit": "vitest run",
     "prepack": "npm run build"
   },
   "engines": {

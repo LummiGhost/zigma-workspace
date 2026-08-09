@@ -7,7 +7,6 @@ import {
   insertWorkspaceLock,
   getActiveLockForWorkspace,
   deleteLockForWorkspace,
-  updateWorkspaceStatus,
   insertWorkspaceEvent,
 } from "../db/queries.js";
 
@@ -64,7 +63,6 @@ export function lockWorkspace(
     acquired_at: acquiredAt,
   });
 
-  updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
   emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
 
   return {
@@ -93,11 +91,6 @@ export function unlockWorkspace(
   }
 
   deleteLockForWorkspace(db, workspaceId);
-
-  // Restore status to active if it was locked
-  if (wsRow.status === "locked") {
-    updateWorkspaceStatus(db, workspaceId, "active", now());
-  }
 
   emitEvent(db, workspaceId, "workspace.unlocked", {
     previousOwner: existingLock.owner,
