@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS workspace_locks (
   mode TEXT NOT NULL,
   owner TEXT NOT NULL,
   expires_at TEXT,
-  acquired_at TEXT NOT NULL
+  acquired_at TEXT NOT NULL,
+  last_heartbeat TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_snapshots (
@@ -69,14 +70,11 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
-function migrateWorkspaceContextColumns(db: Database.Database): void {
+function migrateLockLeaseColumns(db: Database.Database): void {
   const migrate = db.transaction(() => {
-    const cols = db.pragma("table_info(workspaces)") as Array<{ name: string }>;
-    const colNames = new Set(cols.map((column) => column.name));
-    for (const col of ["workflow_run_id", "job_id", "step_id", "agent_id"]) {
-      if (!colNames.has(col)) {
-        db.exec(`ALTER TABLE workspaces ADD COLUMN ${col} TEXT`);
-      }
+    const columns = db.pragma("table_info(workspace_locks)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "last_heartbeat")) {
+      db.exec("ALTER TABLE workspace_locks ADD COLUMN last_heartbeat TEXT");
     }
   });
   migrate();
@@ -89,9 +87,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
-
-  migrateWorkspaceContextColumns(db);
-
+  migrateLockLeaseColumns(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }

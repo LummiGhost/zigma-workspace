@@ -43,6 +43,7 @@ export interface WorkspaceLock {
   owner: string;
   expiresAt?: string;
   acquiredAt: string;
+  lastHeartbeat?: string;
 }
 
 export interface WorkspaceDiff {
@@ -154,6 +155,7 @@ export interface WorkspaceLockRow {
   owner: string;
   expires_at: string | null;
   acquired_at: string;
+  last_heartbeat: string | null;
 }
 
 export interface WorkspaceSnapshotRow {

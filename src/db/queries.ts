@@ -111,9 +111,9 @@ export function insertWorkspaceLock(
 ): void {
   db.prepare(`
     INSERT INTO workspace_locks
-      (id, workspace_id, mode, owner, expires_at, acquired_at)
+      (id, workspace_id, mode, owner, expires_at, acquired_at, last_heartbeat)
     VALUES
-      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at)
+      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at, @last_heartbeat)
   `).run(row);
 }
 
@@ -121,9 +121,45 @@ export function getActiveLockForWorkspace(
   db: Database.Database,
   workspaceId: string
 ): WorkspaceLockRow | undefined {
+  const now = new Date().toISOString();
   return db
-    .prepare("SELECT * FROM workspace_locks WHERE workspace_id = ? ORDER BY acquired_at DESC LIMIT 1")
-    .get(workspaceId) as WorkspaceLockRow | undefined;
+    .prepare(
+      "SELECT * FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY acquired_at DESC LIMIT 1"
+    )
+    .get(workspaceId, now) as WorkspaceLockRow | undefined;
+}
+
+export function updateLockHeartbeat(
+  db: Database.Database,
+  workspaceId: string,
+  lastHeartbeat: string
+): boolean {
+  const result = db.prepare(
+    `UPDATE workspace_locks
+     SET last_heartbeat = ?
+     WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, workspaceId, lastHeartbeat);
+  return result.changes > 0;
+}
+
+export function releaseLockForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  releasedAt: string
+): void {
+  db.prepare(
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+  ).run(workspaceId, releasedAt);
+}
+
+export function deleteExpiredLocksForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  expiredAt: string
+): void {
+  db.prepare(
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+  ).run(workspaceId, expiredAt);
 }
 
 export function deleteLockForWorkspace(
