@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   getWorkspaceById,
   updateWorkspaceStatus,
@@ -48,7 +49,7 @@ export function cleanupWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  if (row.status === "cleaned") {
+  if (row.status === "CLEANED") {
     return {
       workspaceId,
       path: row.path,
@@ -99,8 +100,15 @@ export function cleanupWorkspace(
     }
   }
 
-  // Update status regardless of filesystem result
-  updateWorkspaceStatus(db, workspaceId, "cleaned", now());
+  // Transition to CLEANED through the state machine
+  if (!isWorkspaceState(row.status)) {
+    throw new ZigmaError("INVALID_INPUT", `Unknown workspace state: "${row.status}"`, {
+      workspaceId,
+      status: row.status,
+    });
+  }
+  const cleaned = transition(row.status, "CLEANED");
+  updateWorkspaceStatus(db, workspaceId, cleaned, now());
   emitEvent(db, workspaceId, "workspace.cleaned", { removed, message });
 
   return { workspaceId, path: workspacePath, removed, message };
@@ -126,7 +134,7 @@ export function detectOrphanWorktrees(
   // Build a set of known workspace paths
   const knownPaths = new Set(
     workspaceRows
-      .filter((r) => r.status !== "cleaned")
+      .filter((r) => r.status !== "CLEANED")
       .map((r) => r.path)
   );
 

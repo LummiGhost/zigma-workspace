@@ -3,6 +3,10 @@ export interface Workspace {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
   repositoryUrl: string;
   baseRef: string;
   baseCommit: string;
@@ -10,13 +14,15 @@ export interface Workspace {
   path: string;
   mode: "read-only" | "writable";
   status:
-    | "created"
-    | "prepared"
-    | "locked"
-    | "active"
-    | "archived"
-    | "cleaned"
-    | "failed";
+    | "CREATED"
+    | "PREPARING"
+    | "READY"
+    | "RUNNING"
+    | "WAIT_REVIEW"
+    | "MERGED"
+    | "CLEANED"
+    | "FAILED"
+    | "ARCHIVED";
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +43,7 @@ export interface WorkspaceLock {
   owner: string;
   expiresAt?: string;
   acquiredAt: string;
+  lastHeartbeat?: string;
 }
 
 export interface WorkspaceDiff {
@@ -65,6 +72,10 @@ export interface WorkspaceManifest {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repo: string;
   base_ref: string;
   base_commit: string;
@@ -83,12 +94,20 @@ export interface CreateWorkspaceInput {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface BindWorkspaceRunInput {
   workspaceId: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface ZigmaWorkspaceConfig {
@@ -105,6 +124,10 @@ export interface WorkspaceRow {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repository_url: string;
   base_ref: string;
   base_commit: string;
@@ -134,6 +157,7 @@ export interface WorkspaceLockRow {
   owner: string;
   expires_at: string | null;
   acquired_at: string;
+  last_heartbeat: string | null;
 }
 
 export interface WorkspaceSnapshotRow {

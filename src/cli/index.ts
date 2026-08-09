@@ -15,7 +15,7 @@ import {
   getRepositoryCacheByUrl,
 } from "../db/queries.js";
 import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
-import { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
+import { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
@@ -89,6 +89,10 @@ function formatWorkspace(ws: Workspace): string {
     `repo:    ${ws.repositoryUrl}`,
     ws.taskId ? `task:    ${ws.taskId}` : null,
     ws.flowRunId ? `flow:    ${ws.flowRunId}` : null,
+    ws.workflowRunId ? `wf-run:  ${ws.workflowRunId}` : null,
+    ws.jobId ? `job:     ${ws.jobId}` : null,
+    ws.stepId ? `step:    ${ws.stepId}` : null,
+    ws.agentId ? `agent:   ${ws.agentId}` : null,
     `created: ${ws.createdAt}`,
   ]
     .filter(Boolean)
@@ -203,6 +207,10 @@ program
   .option("--project <projectId>", "Project ID to associate")
   .option("--task <taskId>", "Task ID to associate")
   .option("--flow-run <flowRunId>", "Flow run ID to associate")
+  .option("--workflow-run <workflowRunId>", "Workflow run ID")
+  .option("--job <jobId>", "Job ID")
+  .option("--step <stepId>", "Step ID")
+  .option("--agent <agentId>", "Agent ID")
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
@@ -214,6 +222,10 @@ program
       project?: string;
       task?: string;
       flowRun?: string;
+      workflowRun?: string;
+      job?: string;
+      step?: string;
+      agent?: string;
       operationId?: string;
       json?: boolean;
     }) => {
@@ -238,6 +250,10 @@ program
           project: opts.project ?? null,
           task: opts.task ?? null,
           flowRun: opts.flowRun ?? null,
+          workflowRun: opts.workflowRun ?? null,
+          job: opts.job ?? null,
+          step: opts.step ?? null,
+          agent: opts.agent ?? null,
         };
 
         if (opts.operationId) {
@@ -268,6 +284,10 @@ program
           projectId: opts.project,
           taskId: opts.task,
           flowRunId: opts.flowRun,
+          workflowRunId: opts.workflowRun,
+          jobId: opts.job,
+          stepId: opts.step,
+          agentId: opts.agent,
         });
 
         const data = {
@@ -307,6 +327,10 @@ program
   .requiredOption("--workspace <id>", "Workspace ID")
   .option("--task <taskId>", "Task ID")
   .option("--flow-run <flowRunId>", "Flow run ID")
+  .option("--workflow-run <workflowRunId>", "Workflow run ID")
+  .option("--job <jobId>", "Job ID")
+  .option("--step <stepId>", "Step ID")
+  .option("--agent <agentId>", "Agent ID")
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
   .option("--json", "Output JSON")
   .action(
@@ -314,6 +338,10 @@ program
       workspace: string;
       task?: string;
       flowRun?: string;
+      workflowRun?: string;
+      job?: string;
+      step?: string;
+      agent?: string;
       operationId?: string;
       json?: boolean;
     }) => {
@@ -326,6 +354,10 @@ program
           workspace: opts.workspace,
           task: opts.task ?? null,
           flowRun: opts.flowRun ?? null,
+          workflowRun: opts.workflowRun ?? null,
+          job: opts.job ?? null,
+          step: opts.step ?? null,
+          agent: opts.agent ?? null,
         };
 
         if (opts.operationId) {
@@ -352,12 +384,20 @@ program
           workspaceId: opts.workspace,
           taskId: opts.task,
           flowRunId: opts.flowRun,
+          workflowRunId: opts.workflowRun,
+          jobId: opts.job,
+          stepId: opts.step,
+          agentId: opts.agent,
         });
 
         const data = {
           workspace_id: workspace.id,
           task_id: workspace.taskId ?? null,
           flow_run_id: workspace.flowRunId ?? null,
+          workflow_run_id: workspace.workflowRunId ?? null,
+          job_id: workspace.jobId ?? null,
+          step_id: workspace.stepId ?? null,
+          agent_id: workspace.agentId ?? null,
           status: workspace.status,
           updated_at: workspace.updatedAt,
         };
@@ -408,6 +448,10 @@ program
             repository_cache_id: cacheRow?.id ?? null,
             task_id: workspace.taskId ?? null,
             flow_run_id: workspace.flowRunId ?? null,
+            workflow_run_id: workspace.workflowRunId ?? null,
+            job_id: workspace.jobId ?? null,
+            step_id: workspace.stepId ?? null,
+            agent_id: workspace.agentId ?? null,
             project_id: workspace.projectId ?? null,
             created_at: workspace.createdAt,
             updated_at: workspace.updatedAt,
@@ -418,6 +462,7 @@ program
                   owner: lock.owner,
                   acquired_at: lock.acquiredAt,
                   expires_at: lock.expiresAt ?? null,
+                  last_heartbeat: lock.lastHeartbeat ?? null,
                 }
               : null,
           },
@@ -664,6 +709,10 @@ program
             repository_url: ws.repositoryUrl,
             task_id: ws.taskId ?? null,
             flow_run_id: ws.flowRunId ?? null,
+            workflow_run_id: ws.workflowRunId ?? null,
+            job_id: ws.jobId ?? null,
+            step_id: ws.stepId ?? null,
+            agent_id: ws.agentId ?? null,
             project_id: ws.projectId ?? null,
             created_at: ws.createdAt,
             updated_at: ws.updatedAt,
