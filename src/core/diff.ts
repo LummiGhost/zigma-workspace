@@ -1,11 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceDiff, ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { getWorkspaceById, insertWorkspaceEvent } from "../db/queries.js";
+import { getWorkspaceById } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import {
   getStatus,
   getChangedFiles,
@@ -15,34 +15,45 @@ import {
   getHeadCommit,
 } from "../git/index.js";
 
-function now(): string {
-  return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
-}
-
 function sha256(content: string): string {
   return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
+}
+
+export interface PathFilter {
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+}
+
+export function filterFiles(files: string[], filter: PathFilter): string[] {
+  let result = files;
+
+  if (filter.allowedPaths && filter.allowedPaths.length > 0) {
+    const allowed = filter.allowedPaths
+      .map((candidate) => path.posix.normalize(candidate.replace(/\\/g, "/")).replace(/^\.\//, "").replace(/\/$/, ""))
+      .filter((candidate) => candidate !== "" && candidate !== ".." && !candidate.startsWith("../") && !path.posix.isAbsolute(candidate));
+    result = result.filter((file) => {
+      const normalized = path.posix.normalize(file.replace(/\\/g, "/")).replace(/^\.\//, "");
+      if (normalized === ".." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
+        return false;
+      }
+      return allowed.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
+    });
+  }
+
+  if (filter.deniedPaths && filter.deniedPaths.length > 0) {
+    const matcher = createIgnoreMatcher(filter.deniedPaths);
+    result = result.filter((f) => !matcher.matches(f));
+  }
+
+  return result;
 }
 
 export function collectDiff(
   db: Database.Database,
   config: ZigmaWorkspaceConfig,
   workspaceId: string,
-  patchOutPath?: string
+  patchOutPath?: string,
+  pathFilter?: PathFilter,
 ): WorkspaceDiff {
   const row = getWorkspaceById(db, workspaceId);
   if (!row) {
@@ -57,11 +68,20 @@ export function collectDiff(
   const workspacePath = row.path;
 
   const statusText = getStatus(workspacePath);
-  const changedFiles = getChangedFiles(workspacePath, baseCommit);
-  const untrackedFiles = getUntrackedFiles(workspacePath);
+  let changedFiles = getChangedFiles(workspacePath, baseCommit);
+  let untrackedFiles = getUntrackedFiles(workspacePath);
   const diffStat = getDiffStat(workspacePath, baseCommit);
   const headCommit = getHeadCommit(workspacePath);
-  const patch = generatePatch(workspacePath, baseCommit);
+  let patch = generatePatch(workspacePath, baseCommit);
+
+  // Apply path filtering
+  if (pathFilter) {
+    changedFiles = filterFiles(changedFiles, pathFilter);
+    untrackedFiles = filterFiles(untrackedFiles, pathFilter);
+    if (changedFiles.length === 0 && untrackedFiles.length === 0) {
+      patch = '';
+    }
+  }
 
   // Build summary
   const totalChanged = changedFiles.length;
@@ -99,11 +119,11 @@ export function collectDiff(
     fs.writeFileSync(resolvedPatchPath, patch, "utf-8");
   }
 
-  emitEvent(db, workspaceId, "workspace.diff.collected", {
-    changedFiles: totalChanged,
-    untrackedFiles: totalUntracked,
-    patchPath: resolvedPatchPath,
-    patchChecksum: patchDigest ?? null,
+  emitWorkspaceEvent(db, workspaceId, "workspace.diff.collected", {
+    changed_files: totalChanged,
+    untracked_files: totalUntracked,
+    patch_path: resolvedPatchPath ?? null,
+    patch_checksum: patchDigest ?? null,
   });
 
   return {

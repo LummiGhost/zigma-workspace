@@ -1,6 +1,4 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
-import * as crypto from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import type Database from "better-sqlite3";
 import type { WorkspaceSnapshot, ZigmaWorkspaceConfig } from "../types/index.js";
@@ -8,28 +6,14 @@ import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceSnapshot,
-  insertWorkspaceEvent,
   listSnapshotsForWorkspace,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import { generatePatch, getHeadCommit } from "../git/index.js";
+import { createArtifact } from "./artifact.js";
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
 }
 
 function sha256(content: string): string {
@@ -48,12 +32,29 @@ export function createSnapshot(
 
   const snapId = `snap_${uuidv4()}`;
   const ts = now();
-  const snapshotDir = path.join(config.snapshotsDir, workspaceId);
-  fs.mkdirSync(snapshotDir, { recursive: true });
-
   const headCommit = getHeadCommit(row.path);
 
-  // Collect metadata snapshot
+  // Collect the patch before inserting anything so the snapshot kind is final.
+  let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
+  let patch: string | null = null;
+  if (fs.existsSync(row.path)) {
+    const generatedPatch = generatePatch(row.path, row.base_commit);
+    if (generatedPatch.trim()) {
+      patch = generatedPatch;
+      snapshotKind = "diff";
+    }
+  }
+
+  // The parent snapshot must exist before artifacts because artifacts.snapshot_id
+  // is protected by a foreign key.
+  insertWorkspaceSnapshot(db, {
+    id: snapId,
+    workspace_id: workspaceId,
+    kind: snapshotKind,
+    created_at: ts,
+  });
+
+  // Collect metadata as a metadata artifact
   const metadata = {
     snapshot_id: snapId,
     workspace_id: workspaceId,
@@ -68,22 +69,26 @@ export function createSnapshot(
     path: row.path,
   };
 
-  const metadataPath = path.join(snapshotDir, `${snapId}.metadata.json`);
-  fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
+  createArtifact(
+    db,
+    config,
+    snapId,
+    workspaceId,
+    "metadata",
+    JSON.stringify(metadata, null, 2),
+    `${snapId}.metadata.json`,
+  );
 
-  // Collect diff snapshot
-  let patchPath: string | undefined;
-  let checksum: string | undefined;
-  let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
-
-  if (fs.existsSync(row.path)) {
-    const patch = generatePatch(row.path, row.base_commit);
-    if (patch.trim()) {
-      patchPath = path.join(snapshotDir, `${snapId}.patch`);
-      fs.writeFileSync(patchPath, patch, "utf-8");
-      checksum = sha256(patch);
-      snapshotKind = "diff";
-    }
+  if (patch !== null) {
+    createArtifact(
+      db,
+      config,
+      snapId,
+      workspaceId,
+      "patch",
+      patch,
+      `${snapId}.patch`,
+    );
   }
 
   const snapshotRow = {
@@ -97,19 +102,17 @@ export function createSnapshot(
 
   insertWorkspaceSnapshot(db, snapshotRow);
 
-  emitEvent(db, workspaceId, "workspace.snapshot.created", {
-    snapshotId: snapId,
+  emitWorkspaceEvent(db, workspaceId, "workspace.snapshot.created", {
+    snapshot_id: snapId,
     kind: snapshotKind,
-    patchPath,
-    checksum,
+    patch_path: patchPath ?? null,
+    checksum: checksum ?? null,
   });
 
   return {
     id: snapId,
     workspaceId,
     kind: snapshotKind,
-    path: patchPath ?? metadataPath,
-    checksum,
     createdAt: ts,
   };
 }
@@ -123,8 +126,6 @@ export function listSnapshots(
     id: r.id,
     workspaceId: r.workspace_id,
     kind: r.kind as WorkspaceSnapshot["kind"],
-    path: r.path ?? undefined,
-    checksum: r.checksum ?? undefined,
     createdAt: r.created_at,
   }));
 }

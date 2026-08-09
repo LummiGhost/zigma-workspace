@@ -3,6 +3,10 @@ export interface Workspace {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
   repositoryUrl: string;
   baseRef: string;
   baseCommit: string;
@@ -10,13 +14,15 @@ export interface Workspace {
   path: string;
   mode: "read-only" | "writable";
   status:
-    | "created"
-    | "prepared"
-    | "locked"
-    | "active"
-    | "archived"
-    | "cleaned"
-    | "failed";
+    | "CREATED"
+    | "PREPARING"
+    | "READY"
+    | "RUNNING"
+    | "WAIT_REVIEW"
+    | "MERGED"
+    | "CLEANED"
+    | "FAILED"
+    | "ARCHIVED";
   createdAt: string;
   updatedAt: string;
 }
@@ -37,6 +43,7 @@ export interface WorkspaceLock {
   owner: string;
   expiresAt?: string;
   acquiredAt: string;
+  lastHeartbeat?: string;
 }
 
 export interface WorkspaceDiff {
@@ -51,12 +58,44 @@ export interface WorkspaceDiff {
   summary: string;
 }
 
+// ── Artifact ─────────────────────────────────────────────────────────────────
+
+export const ARTIFACT_KINDS = [
+  "metadata",
+  "patch",
+  "log",
+  "report",
+  "generated-file",
+] as const;
+
+export type ArtifactKind = (typeof ARTIFACT_KINDS)[number];
+
+export interface Artifact {
+  id: string;
+  snapshotId: string;
+  kind: ArtifactKind;
+  path: string;
+  checksum: string;
+  mediaType: string;
+  createdAt: string;
+}
+
+export interface ArtifactRow {
+  id: string;
+  snapshot_id: string;
+  kind: string;
+  path: string;
+  checksum: string;
+  media_type: string;
+  created_at: string;
+}
+
+// ── WorkspaceSnapshot ───────────────────────────────────────────────────────
+
 export interface WorkspaceSnapshot {
   id: string;
   workspaceId: string;
   kind: "manifest" | "diff" | "archive" | "metadata-only";
-  path?: string;
-  checksum?: string;
   createdAt: string;
 }
 
@@ -65,6 +104,10 @@ export interface WorkspaceManifest {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repo: string;
   base_ref: string;
   base_commit: string;
@@ -83,12 +126,20 @@ export interface CreateWorkspaceInput {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface BindWorkspaceRunInput {
   workspaceId: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface ZigmaWorkspaceConfig {
@@ -105,6 +156,10 @@ export interface WorkspaceRow {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repository_url: string;
   base_ref: string;
   base_commit: string;
@@ -114,6 +169,8 @@ export interface WorkspaceRow {
   status: string;
   created_at: string;
   updated_at: string;
+  workspace_type?: string | null;
+  definition_path?: string | null;
 }
 
 export interface RepositoryCacheRow {
@@ -132,14 +189,13 @@ export interface WorkspaceLockRow {
   owner: string;
   expires_at: string | null;
   acquired_at: string;
+  last_heartbeat: string | null;
 }
 
 export interface WorkspaceSnapshotRow {
   id: string;
   workspace_id: string;
   kind: string;
-  path: string | null;
-  checksum: string | null;
   created_at: string;
 }
 
@@ -148,6 +204,77 @@ export interface WorkspaceEventRow {
   workspace_id: string;
   event: string;
   data: string | null;
+  actor?: string | null;
+  created_at: string;
+}
+
+// ── Standardized event types ────────────────────────────────────────────────
+
+export const WORKSPACE_EVENT_NAMES = [
+  "workspace.created",
+  "workspace.bound",
+  "workspace.locked",
+  "workspace.unlocked",
+  "workspace.snapshot.created",
+  "workspace.diff.collected",
+  "workspace.cleaned",
+] as const;
+
+export type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number];
+
+export interface WorkspaceCreatedPayload {
+  branch: string;
+  base_commit: string;
+}
+
+export interface WorkspaceBoundPayload {
+  task_id: string | null;
+  flow_run_id: string | null;
+}
+
+export interface WorkspaceLockedPayload {
+  mode: "read" | "write";
+  owner: string;
+}
+
+export interface WorkspaceUnlockedPayload {
+  previous_owner: string;
+}
+
+export interface WorkspaceSnapshotCreatedPayload {
+  snapshot_id: string;
+  kind: string;
+  patch_path: string | null;
+  checksum: string | null;
+}
+
+export interface WorkspaceDiffCollectedPayload {
+  changed_files: number;
+  untracked_files: number;
+  patch_path: string | null;
+  patch_checksum: string | null;
+}
+
+export interface WorkspaceCleanedPayload {
+  removed: boolean;
+  message: string;
+}
+
+export type WorkspaceEventPayload =
+  | WorkspaceCreatedPayload
+  | WorkspaceBoundPayload
+  | WorkspaceLockedPayload
+  | WorkspaceUnlockedPayload
+  | WorkspaceSnapshotCreatedPayload
+  | WorkspaceDiffCollectedPayload
+  | WorkspaceCleanedPayload;
+
+export interface WorkspaceEvent {
+  id: string;
+  workspace_id: string;
+  event: WorkspaceEventName;
+  data: WorkspaceEventPayload | null;
+  actor?: string | null;
   created_at: string;
 }
 
