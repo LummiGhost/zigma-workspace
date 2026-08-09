@@ -3,6 +3,10 @@ export interface Workspace {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
   repositoryUrl: string;
   baseRef: string;
   baseCommit: string;
@@ -67,6 +71,10 @@ export interface WorkspaceManifest {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repo: string;
   base_ref: string;
   base_commit: string;
@@ -85,12 +93,20 @@ export interface CreateWorkspaceInput {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface BindWorkspaceRunInput {
   workspaceId: string;
   taskId?: string;
   flowRunId?: string;
+  workflowRunId?: string;
+  jobId?: string;
+  stepId?: string;
+  agentId?: string;
 }
 
 export interface ZigmaWorkspaceConfig {
@@ -107,6 +123,10 @@ export interface WorkspaceRow {
   project_id: string | null;
   task_id: string | null;
   flow_run_id: string | null;
+  workflow_run_id: string | null;
+  job_id: string | null;
+  step_id: string | null;
+  agent_id: string | null;
   repository_url: string;
   base_ref: string;
   base_commit: string;

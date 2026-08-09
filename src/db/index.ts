@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_id TEXT,
   task_id TEXT,
   flow_run_id TEXT,
+  workflow_run_id TEXT,
+  job_id TEXT,
+  step_id TEXT,
+  agent_id TEXT,
   repository_url TEXT NOT NULL,
   base_ref TEXT NOT NULL,
   base_commit TEXT NOT NULL,
@@ -65,6 +69,19 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
+function migrateWorkspaceContextColumns(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    const cols = db.pragma("table_info(workspaces)") as Array<{ name: string }>;
+    const colNames = new Set(cols.map((column) => column.name));
+    for (const col of ["workflow_run_id", "job_id", "step_id", "agent_id"]) {
+      if (!colNames.has(col)) {
+        db.exec(`ALTER TABLE workspaces ADD COLUMN ${col} TEXT`);
+      }
+    }
+  });
+  migrate();
+}
+
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const existing = _dbMap.get(config.dbPath);
   if (existing) return existing;
@@ -72,7 +89,9 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
-  migrateStatusColumn(db);
+
+  migrateWorkspaceContextColumns(db);
+
   _dbMap.set(config.dbPath, db);
   return db;
 }
