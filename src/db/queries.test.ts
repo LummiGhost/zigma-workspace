@@ -1,193 +1,208 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import Database from "better-sqlite3";
 import {
-  insertWorkspaceLock,
-  getActiveLockForWorkspace,
-  deleteLockForWorkspace,
-  updateLockHeartbeat,
+  insertArtifact,
+  listArtifactsForSnapshot,
+  insertWorkspaceSnapshot,
 } from "./queries.js";
-import type { WorkspaceLockRow } from "../types/index.js";
+import type { ArtifactRow, WorkspaceSnapshotRow } from "../types/index.js";
 
+// Reuse the schema from db/index.ts to create an in-memory test database
 const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS workspace_locks (
+CREATE TABLE IF NOT EXISTS workspace_snapshots (
   id TEXT PRIMARY KEY,
   workspace_id TEXT NOT NULL,
-  mode TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  expires_at TEXT,
-  acquired_at TEXT NOT NULL,
-  last_heartbeat TEXT
+  kind TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  snapshot_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  path TEXT NOT NULL,
+  checksum TEXT NOT NULL,
+  media_type TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (snapshot_id) REFERENCES workspace_snapshots(id)
 );
 `;
 
-let db: Database.Database;
-
-beforeEach(() => {
-  db = new Database(":memory:");
-  db.pragma("journal_mode = WAL");
+function createTestDb(): Database.Database {
+  const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
-});
-
-afterEach(() => {
-  db.close();
-});
-
-function makeLockRow(overrides: Partial<WorkspaceLockRow> = {}): WorkspaceLockRow {
-  return {
-    id: "lock_test",
-    workspace_id: "ws_test",
-    mode: "write",
-    owner: "test-owner",
-    expires_at: null,
-    acquired_at: "2025-01-01T00:00:00Z",
-    last_heartbeat: "2025-01-01T00:00:00Z",
-    ...overrides,
-  };
+  return db;
 }
 
-// ── getActiveLockForWorkspace ───────────────────────────────────────────────
+describe("insertArtifact", () => {
+  let db: Database.Database;
 
-describe("getActiveLockForWorkspace", () => {
-  it("should return the active lock when it exists and is not expired", () => {
-    const now = new Date();
-    const futureExpiry = new Date(now.getTime() + 3600000).toISOString(); // +1 hour
-    const row = makeLockRow({ expires_at: futureExpiry });
-    insertWorkspaceLock(db, row);
+  beforeAll(() => {
+    db = createTestDb();
+  });
 
-    const result = getActiveLockForWorkspace(db, "ws_test");
+  afterAll(() => {
+    db.close();
+  });
+
+  it("should insert an artifact row into the artifacts table", () => {
+    // First insert a parent snapshot so FK constraint is satisfied
+    const snapshotRow: WorkspaceSnapshotRow = {
+      id: "snap_test1",
+      workspace_id: "ws_test1",
+      kind: "diff",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+    insertWorkspaceSnapshot(db, snapshotRow);
+
+    const artifactRow: ArtifactRow = {
+      id: "art_test1",
+      snapshot_id: "snap_test1",
+      kind: "metadata",
+      path: "/tmp/snapshots/ws_test1/metadata.json",
+      checksum: "abc123def456",
+      media_type: "application/json",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+
+    insertArtifact(db, artifactRow);
+
+    // Verify the row was inserted by querying directly
+    const result = db
+      .prepare("SELECT * FROM artifacts WHERE id = ?")
+      .get("art_test1") as ArtifactRow | undefined;
 
     expect(result).toBeDefined();
-    expect(result!.id).toBe("lock_test");
-    expect(result!.owner).toBe("test-owner");
+    expect(result!.id).toBe("art_test1");
+    expect(result!.snapshot_id).toBe("snap_test1");
+    expect(result!.kind).toBe("metadata");
+    expect(result!.path).toBe("/tmp/snapshots/ws_test1/metadata.json");
+    expect(result!.checksum).toBe("abc123def456");
+    expect(result!.media_type).toBe("application/json");
+    expect(result!.created_at).toBe("2024-01-01T00:00:00.000Z");
   });
 
-  it("should return undefined when the only lock is expired", () => {
-    const now = new Date();
-    const pastExpiry = new Date(now.getTime() - 3600000).toISOString(); // -1 hour
-    const row = makeLockRow({ expires_at: pastExpiry });
-    insertWorkspaceLock(db, row);
+  it("should fail when inserting an artifact referencing a non-existent snapshot", () => {
+    const artifactRow: ArtifactRow = {
+      id: "art_orphan",
+      snapshot_id: "snap_nonexistent",
+      kind: "patch",
+      path: "/tmp/file.patch",
+      checksum: "sha256",
+      media_type: "text/x-diff",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
 
-    const result = getActiveLockForWorkspace(db, "ws_test");
-
-    expect(result).toBeUndefined();
-  });
-
-  it("should return undefined when no lock exists for the workspace", () => {
-    const result = getActiveLockForWorkspace(db, "ws_none");
-
-    expect(result).toBeUndefined();
-  });
-
-  it("should return the most recent non-expired lock when multiple locks exist", () => {
-    const now = new Date();
-    const futureExpiry = new Date(now.getTime() + 3600000).toISOString();
-    const pastExpiry = new Date(now.getTime() - 3600000).toISOString();
-
-    // Insert an older expired lock
-    insertWorkspaceLock(
-      db,
-      makeLockRow({
-        id: "lock_old",
-        expires_at: pastExpiry,
-        acquired_at: "2025-01-01T00:00:00Z",
-      })
-    );
-
-    // Insert a newer non-expired lock
-    insertWorkspaceLock(
-      db,
-      makeLockRow({
-        id: "lock_new",
-        expires_at: futureExpiry,
-        acquired_at: "2025-06-01T00:00:00Z",
-      })
-    );
-
-    const result = getActiveLockForWorkspace(db, "ws_test");
-
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("lock_new");
-  });
-
-  it("should return a lock with null expires_at as never-expired", () => {
-    const row = makeLockRow({ expires_at: null });
-    insertWorkspaceLock(db, row);
-
-    const result = getActiveLockForWorkspace(db, "ws_test");
-
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("lock_test");
+    expect(() => insertArtifact(db, artifactRow)).toThrow();
   });
 });
 
-// ── updateLockHeartbeat ─────────────────────────────────────────────────────
+describe("listArtifactsForSnapshot", () => {
+  let db: Database.Database;
 
-describe("updateLockHeartbeat", () => {
-  it("should update the last_heartbeat for a workspace lock", () => {
-    const row = makeLockRow({ last_heartbeat: "2025-01-01T00:00:00Z" });
-    insertWorkspaceLock(db, row);
-
-    const newHeartbeat = "2025-06-15T12:00:00Z";
-    expect(updateLockHeartbeat(db, "ws_test", newHeartbeat)).toBe(true);
-
-    const result = db
-      .prepare("SELECT last_heartbeat FROM workspace_locks WHERE workspace_id = ?")
-      .get("ws_test") as { last_heartbeat: string } | undefined;
-
-    expect(result).toBeDefined();
-    expect(result!.last_heartbeat).toBe(newHeartbeat);
+  beforeAll(() => {
+    db = createTestDb();
   });
 
-  it("should report when no active lock was updated", () => {
-    expect(updateLockHeartbeat(db, "ws_none", "2025-06-15T12:00:00Z")).toBe(false);
+  afterAll(() => {
+    db.close();
+  });
+
+  it("should return artifacts belonging to a snapshot", () => {
+    // Insert parent snapshot
+    const snapshotRow: WorkspaceSnapshotRow = {
+      id: "snap_list1",
+      workspace_id: "ws_1",
+      kind: "diff",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+    insertWorkspaceSnapshot(db, snapshotRow);
+
+    // Insert two artifacts
+    const art1: ArtifactRow = {
+      id: "art_list1",
+      snapshot_id: "snap_list1",
+      kind: "metadata",
+      path: "/tmp/meta.json",
+      checksum: "sha1",
+      media_type: "application/json",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+
+    const art2: ArtifactRow = {
+      id: "art_list2",
+      snapshot_id: "snap_list1",
+      kind: "patch",
+      path: "/tmp/diff.patch",
+      checksum: "sha2",
+      media_type: "text/x-diff",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+
+    insertArtifact(db, art1);
+    insertArtifact(db, art2);
+
+    const results = listArtifactsForSnapshot(db, "snap_list1");
+
+    expect(results).toBeDefined();
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.id).sort()).toEqual(["art_list1", "art_list2"]);
+  });
+
+  it("should return an empty array for a snapshot with no artifacts", () => {
+    // Insert a snapshot with no artifacts
+    const snapshotRow: WorkspaceSnapshotRow = {
+      id: "snap_empty",
+      workspace_id: "ws_1",
+      kind: "metadata-only",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+    insertWorkspaceSnapshot(db, snapshotRow);
+
+    const results = listArtifactsForSnapshot(db, "snap_empty");
+    expect(results).toBeDefined();
+    expect(results).toHaveLength(0);
   });
 });
 
-// ── insertWorkspaceLock ─────────────────────────────────────────────────────
+describe("insertWorkspaceSnapshot (updated schema)", () => {
+  let db: Database.Database;
 
-describe("insertWorkspaceLock", () => {
-  it("should persist last_heartbeat when provided", () => {
-    const row = makeLockRow({ last_heartbeat: "2025-03-01T12:00:00Z" });
-    insertWorkspaceLock(db, row);
+  beforeAll(() => {
+    db = createTestDb();
+  });
+
+  afterAll(() => {
+    db.close();
+  });
+
+  it("should insert a snapshot row without path or checksum columns", () => {
+    const snapshotRow: WorkspaceSnapshotRow = {
+      id: "snap_schema1",
+      workspace_id: "ws_1",
+      kind: "metadata-only",
+      created_at: "2024-01-01T00:00:00.000Z",
+    };
+
+    insertWorkspaceSnapshot(db, snapshotRow);
 
     const result = db
-      .prepare("SELECT last_heartbeat FROM workspace_locks WHERE id = ?")
-      .get("lock_test") as { last_heartbeat: string } | undefined;
+      .prepare("SELECT id, workspace_id, kind, created_at FROM workspace_snapshots WHERE id = ?")
+      .get("snap_schema1") as Record<string, unknown> | undefined;
 
     expect(result).toBeDefined();
-    expect(result!.last_heartbeat).toBe("2025-03-01T12:00:00Z");
-  });
+    expect(result!.id).toBe("snap_schema1");
+    expect(result!.workspace_id).toBe("ws_1");
+    expect(result!.kind).toBe("metadata-only");
+    expect(result!.created_at).toBe("2024-01-01T00:00:00.000Z");
 
-  it("should persist a lock with all required fields", () => {
-    const row = makeLockRow();
-    insertWorkspaceLock(db, row);
-
-    const result = db
-      .prepare("SELECT * FROM workspace_locks WHERE id = ?")
-      .get("lock_test") as WorkspaceLockRow | undefined;
-
-    expect(result).toBeDefined();
-    expect(result!.id).toBe("lock_test");
-    expect(result!.workspace_id).toBe("ws_test");
-    expect(result!.mode).toBe("write");
-    expect(result!.owner).toBe("test-owner");
-  });
-});
-
-// ── deleteLockForWorkspace ──────────────────────────────────────────────────
-
-describe("deleteLockForWorkspace", () => {
-  it("should delete the lock for a workspace", () => {
-    insertWorkspaceLock(db, makeLockRow());
-    expect(getActiveLockForWorkspace(db, "ws_test")).toBeDefined();
-
-    deleteLockForWorkspace(db, "ws_test");
-
-    expect(getActiveLockForWorkspace(db, "ws_test")).toBeUndefined();
-  });
-
-  it("should not throw when no lock exists for the workspace", () => {
-    expect(() => deleteLockForWorkspace(db, "ws_none")).not.toThrow();
+    // Verify path and checksum columns do NOT exist in the table
+    const tableInfo = db
+      .prepare("PRAGMA table_info(workspace_snapshots)")
+      .all() as { name: string }[];
+    const columnNames = tableInfo.map((c) => c.name);
+    expect(columnNames).not.toContain("path");
+    expect(columnNames).not.toContain("checksum");
   });
 });

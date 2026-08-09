@@ -15,6 +15,7 @@ import { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../co
 import { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock.js";
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
+import { getArtifactsForSnapshot } from "../core/artifact.js";
 import { cleanupWorkspace } from "../core/cleanup.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
@@ -575,23 +576,19 @@ program
         }
 
         const snapshot = createSnapshot(db, config, opts.workspace);
-
-        const artifact =
-          snapshot.path && snapshot.checksum
-            ? {
-                uri: toFileUri(snapshot.path),
-                media_type: snapshot.kind === "diff" ? "text/x-diff" : "application/json",
-                digest: `sha256:${snapshot.checksum}`,
-              }
-            : null;
+        const artifacts = getArtifactsForSnapshot(db, snapshot.id);
 
         const data = {
           snapshot_id: snapshot.id,
           workspace_id: snapshot.workspaceId,
           kind: snapshot.kind,
-          path: snapshot.path ?? null,
-          checksum: snapshot.checksum ?? null,
-          artifact,
+          artifacts: artifacts.map((a) => ({
+            id: a.id,
+            kind: a.kind,
+            uri: toFileUri(a.path),
+            media_type: a.mediaType,
+            digest: `sha256:${a.checksum}`,
+          })),
           created_at: snapshot.createdAt,
         };
 
@@ -604,8 +601,9 @@ program
         } else {
           console.log(`Snapshot created: ${snapshot.id}`);
           console.log(`Kind:     ${snapshot.kind}`);
-          if (snapshot.path) console.log(`Path:     ${snapshot.path}`);
-          if (snapshot.checksum) console.log(`Checksum: ${snapshot.checksum}`);
+          for (const a of artifacts) {
+            console.log(`Artifact: ${a.id} (${a.kind}) → ${a.path}`);
+          }
           console.log(`Created:  ${snapshot.createdAt}`);
         }
       } catch (err) {
