@@ -6,9 +6,9 @@ import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
   insertWorkspaceSnapshot,
-  insertWorkspaceEvent,
   listSnapshotsForWorkspace,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import { generatePatch, getHeadCommit } from "../git/index.js";
 import { createArtifact } from "./artifact.js";
 
@@ -16,19 +16,8 @@ function now(): string {
   return new Date().toISOString();
 }
 
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
+function sha256(content: string): string {
+  return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
 export function createSnapshot(
@@ -102,9 +91,22 @@ export function createSnapshot(
     );
   }
 
-  emitEvent(db, workspaceId, "workspace.snapshot.created", {
-    snapshotId: snapId,
+  const snapshotRow = {
+    id: snapId,
+    workspace_id: workspaceId,
     kind: snapshotKind,
+    path: patchPath ?? metadataPath,
+    checksum: checksum ?? null,
+    created_at: ts,
+  };
+
+  insertWorkspaceSnapshot(db, snapshotRow);
+
+  emitWorkspaceEvent(db, workspaceId, "workspace.snapshot.created", {
+    snapshot_id: snapId,
+    kind: snapshotKind,
+    patch_path: patchPath ?? null,
+    checksum: checksum ?? null,
   });
 
   return {

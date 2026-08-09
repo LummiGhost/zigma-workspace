@@ -22,6 +22,17 @@ export type {
   WorkspaceDiff,
   WorkspaceSnapshot,
   WorkspaceManifest,
+  WorkspaceEventRow,
+  WorkspaceEventName,
+  WorkspaceEvent,
+  WorkspaceEventPayload,
+  WorkspaceCreatedPayload,
+  WorkspaceBoundPayload,
+  WorkspaceLockedPayload,
+  WorkspaceUnlockedPayload,
+  WorkspaceSnapshotCreatedPayload,
+  WorkspaceDiffCollectedPayload,
+  WorkspaceCleanedPayload,
   CreateWorkspaceInput,
   BindWorkspaceRunInput,
   ZigmaWorkspaceConfig,
@@ -30,7 +41,7 @@ export type {
   ArtifactRow,
 } from "../types/index.js";
 
-export type { WorkspaceState } from "../core/state-machine.js";
+export { WORKSPACE_EVENT_NAMES } from "../types/index.js";
 
 export { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
 export { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock.js";
@@ -38,6 +49,7 @@ export { collectDiff } from "../core/diff.js";
 export { createSnapshot, listSnapshots } from "../core/snapshot.js";
 export { createArtifact, getArtifactsForSnapshot } from "../core/artifact.js";
 export { cleanupWorkspace, detectOrphanWorktrees } from "../core/cleanup.js";
+export { emitWorkspaceEvent } from "../core/events.js";
 export { getConfig, ensureStateDirs } from "../config/index.js";
 export { openDb } from "../db/index.js";
 

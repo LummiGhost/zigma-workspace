@@ -22,8 +22,8 @@ import {
   insertRepositoryCache,
   getRepositoryCacheByUrl,
   updateRepositoryCacheFetched,
-  insertWorkspaceEvent,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 import {
   checkGitAvailable,
   hashRepoUrl,
@@ -59,21 +59,6 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
 }
 
 /**
@@ -197,12 +182,9 @@ export function createWorkspace(
   const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 
-  // Transition through state machine: CREATED → PREPARING → READY
-  const preparing = transition("CREATED", "PREPARING");
-  updateWorkspaceStatus(db, wsId, preparing, now());
-  const ready = transition(preparing, "READY");
-  updateWorkspaceStatus(db, wsId, ready, now());
-  emitEvent(db, wsId, "workspace.created", { branch, baseCommit });
+  // Mark as prepared
+  updateWorkspaceStatus(db, wsId, "prepared", now());
+  emitWorkspaceEvent(db, wsId, "workspace.created", { branch, base_commit: baseCommit });
 
   const finalRow = getWorkspaceById(db, wsId);
   if (!finalRow) throw new ZigmaError("INTERNAL_ERROR", `Failed to retrieve workspace ${wsId} after creation`, { workspaceId: wsId });
@@ -232,13 +214,9 @@ export function bindRun(
     ts
   );
 
-  emitEvent(db, input.workspaceId, "workspace.bound", {
-    taskId: input.taskId,
-    flowRunId: input.flowRunId,
-    workflowRunId: input.workflowRunId,
-    jobId: input.jobId,
-    stepId: input.stepId,
-    agentId: input.agentId,
+  emitWorkspaceEvent(db, input.workspaceId, "workspace.bound", {
+    task_id: input.taskId ?? row.task_id ?? null,
+    flow_run_id: input.flowRunId ?? row.flow_run_id ?? null,
   });
 
   // Update manifest on disk

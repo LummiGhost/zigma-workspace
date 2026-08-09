@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS workspace_events (
   workspace_id TEXT NOT NULL,
   event TEXT NOT NULL,
   data TEXT,
+  actor TEXT,
   created_at TEXT NOT NULL
 );
 
@@ -79,34 +80,14 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
-const UPGRADE_SQL = `
-CREATE TABLE IF NOT EXISTS workspace_idempotency (
-  operation_id TEXT PRIMARY KEY,
-  command TEXT NOT NULL,
-  input_hash TEXT NOT NULL,
-  result_json TEXT NOT NULL,
-  created_at TEXT NOT NULL
-);
-`;
-
-function applyUpgrades(db: Database.Database): void {
-  try {
-    db.exec(UPGRADE_SQL);
-  } catch {
-    // Table may already exist from earlier schema
-  }
-
-  // v0.2: add workspace_type and definition_path to workspaces
-  try {
-    db.exec(`ALTER TABLE workspaces ADD COLUMN workspace_type TEXT`);
-  } catch {
-    // Column already exists
-  }
-  try {
-    db.exec(`ALTER TABLE workspaces ADD COLUMN definition_path TEXT`);
-  } catch {
-    // Column already exists
-  }
+function migrateWorkspaceEventActor(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    const columns = db.pragma("table_info(workspace_events)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "actor")) {
+      db.exec("ALTER TABLE workspace_events ADD COLUMN actor TEXT");
+    }
+  });
+  migrate();
 }
 
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
@@ -116,7 +97,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
-  applyUpgrades(db);
+  migrateWorkspaceEventActor(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }

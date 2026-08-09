@@ -8,33 +8,11 @@ import {
   getActiveLockForWorkspace,
   releaseLockForWorkspace,
   updateWorkspaceStatus,
-  insertWorkspaceEvent,
-  updateLockHeartbeat,
-  deleteExpiredLocksForWorkspace,
 } from "../db/queries.js";
+import { emitWorkspaceEvent } from "../core/events.js";
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function emitEvent(
-  db: Database.Database,
-  workspaceId: string,
-  event: string,
-  data?: unknown
-): void {
-  insertWorkspaceEvent(db, {
-    id: `evt_${uuidv4()}`,
-    workspace_id: workspaceId,
-    event,
-    data: data ? JSON.stringify(data) : null,
-    created_at: now(),
-  });
-}
-
-function isExpired(expiresAt: string | null): boolean {
-  if (expiresAt === null) return false;
-  return expiresAt <= now();
 }
 
 export function lockWorkspace(
@@ -82,7 +60,18 @@ export function lockWorkspace(
       lastHeartbeat: acquiredAt,
     };
   });
-  return acquire.immediate();
+
+  updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
+  emitWorkspaceEvent(db, workspaceId, "workspace.locked", { mode, owner });
+
+  return {
+    id: lockId,
+    workspaceId,
+    mode,
+    owner,
+    expiresAt,
+    acquiredAt,
+  };
 }
 
 export function unlockWorkspace(
@@ -105,8 +94,8 @@ export function unlockWorkspace(
     updateWorkspaceStatus(db, workspaceId, "active", now());
   }
 
-  emitEvent(db, workspaceId, "workspace.unlocked", {
-    previousOwner: existingLock.owner,
+  emitWorkspaceEvent(db, workspaceId, "workspace.unlocked", {
+    previous_owner: existingLock.owner,
   });
 }
 
