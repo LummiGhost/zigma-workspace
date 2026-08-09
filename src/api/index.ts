@@ -40,7 +40,7 @@ export type {
 export { WORKSPACE_EVENT_NAMES } from "../types/index.js";
 
 export { createWorkspace, bindRun, getWorkspace, listAllWorkspaces } from "../core/workspace.js";
-export { lockWorkspace, unlockWorkspace, getLock } from "../core/lock.js";
+export { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock.js";
 export { collectDiff } from "../core/diff.js";
 export { createSnapshot, listSnapshots } from "../core/snapshot.js";
 export { cleanupWorkspace, detectOrphanWorktrees } from "../core/cleanup.js";

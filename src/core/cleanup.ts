@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   getWorkspaceById,
   updateWorkspaceStatus,
@@ -32,7 +33,7 @@ export function cleanupWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  if (row.status === "cleaned") {
+  if (row.status === "CLEANED") {
     return {
       workspaceId,
       path: row.path,
@@ -110,7 +111,7 @@ export function detectOrphanWorktrees(
   // Build a set of known workspace paths
   const knownPaths = new Set(
     workspaceRows
-      .filter((r) => r.status !== "cleaned")
+      .filter((r) => r.status !== "CLEANED")
       .map((r) => r.path)
   );
 

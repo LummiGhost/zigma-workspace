@@ -12,6 +12,7 @@ import type {
   RepositoryCacheRow,
 } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
+import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   insertWorkspace,
   getWorkspaceById,
@@ -44,6 +45,10 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     projectId: row.project_id ?? undefined,
     taskId: row.task_id ?? undefined,
     flowRunId: row.flow_run_id ?? undefined,
+    workflowRunId: row.workflow_run_id ?? undefined,
+    jobId: row.job_id ?? undefined,
+    stepId: row.step_id ?? undefined,
+    agentId: row.agent_id ?? undefined,
     repositoryUrl: row.repository_url,
     baseRef: row.base_ref,
     baseCommit: row.base_commit,
@@ -137,13 +142,17 @@ export function createWorkspace(
     project_id: input.projectId ?? null,
     task_id: input.taskId ?? null,
     flow_run_id: input.flowRunId ?? null,
+    workflow_run_id: input.workflowRunId ?? null,
+    job_id: input.jobId ?? null,
+    step_id: input.stepId ?? null,
+    agent_id: input.agentId ?? null,
     repository_url: repositoryUrl,
     base_ref: baseRef,
     base_commit: baseCommit,
     branch,
     path: workspacePath,
     mode,
-    status: "created",
+    status: "CREATED",
     created_at: ts,
     updated_at: ts,
   };
@@ -156,6 +165,10 @@ export function createWorkspace(
     project_id: input.projectId ?? null,
     task_id: input.taskId ?? null,
     flow_run_id: input.flowRunId ?? null,
+    workflow_run_id: input.workflowRunId ?? null,
+    job_id: input.jobId ?? null,
+    step_id: input.stepId ?? null,
+    agent_id: input.agentId ?? null,
     repo: repositoryUrl,
     base_ref: baseRef,
     base_commit: baseCommit,
@@ -194,9 +207,12 @@ export function bindRun(
     input.workspaceId,
     input.taskId ?? row.task_id,
     input.flowRunId ?? row.flow_run_id,
+    input.workflowRunId ?? row.workflow_run_id,
+    input.jobId ?? row.job_id,
+    input.stepId ?? row.step_id,
+    input.agentId ?? row.agent_id,
     ts
   );
-  updateWorkspaceStatus(db, input.workspaceId, "active", ts);
 
   emitWorkspaceEvent(db, input.workspaceId, "workspace.bound", {
     task_id: input.taskId ?? row.task_id ?? null,
@@ -212,6 +228,10 @@ export function bindRun(
       ) as WorkspaceManifest;
       manifest.task_id = input.taskId ?? manifest.task_id;
       manifest.flow_run_id = input.flowRunId ?? manifest.flow_run_id;
+      manifest.workflow_run_id = input.workflowRunId ?? manifest.workflow_run_id;
+      manifest.job_id = input.jobId ?? manifest.job_id;
+      manifest.step_id = input.stepId ?? manifest.step_id;
+      manifest.agent_id = input.agentId ?? manifest.agent_id;
       fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
     } catch {
       // Non-fatal: manifest update failed
