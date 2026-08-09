@@ -13,10 +13,12 @@ import type {
 export function insertWorkspace(db: Database.Database, row: WorkspaceRow): void {
   db.prepare(`
     INSERT INTO workspaces
-      (id, project_id, task_id, flow_run_id, repository_url, base_ref, base_commit,
+      (id, project_id, task_id, flow_run_id, workflow_run_id, job_id, step_id, agent_id,
+       repository_url, base_ref, base_commit,
        branch, path, mode, status, created_at, updated_at)
     VALUES
-      (@id, @project_id, @task_id, @flow_run_id, @repository_url, @base_ref, @base_commit,
+      (@id, @project_id, @task_id, @flow_run_id, @workflow_run_id, @job_id, @step_id, @agent_id,
+       @repository_url, @base_ref, @base_commit,
        @branch, @path, @mode, @status, @created_at, @updated_at)
   `).run(row);
 }
@@ -52,11 +54,19 @@ export function updateWorkspaceBindings(
   id: string,
   taskId: string | null,
   flowRunId: string | null,
+  workflowRunId: string | null,
+  jobId: string | null,
+  stepId: string | null,
+  agentId: string | null,
   updatedAt: string
 ): void {
   db.prepare(
-    "UPDATE workspaces SET task_id = ?, flow_run_id = ?, updated_at = ? WHERE id = ?"
-  ).run(taskId, flowRunId, updatedAt, id);
+    `UPDATE workspaces
+     SET task_id = ?, flow_run_id = ?,
+         workflow_run_id = ?, job_id = ?, step_id = ?, agent_id = ?,
+         updated_at = ?
+     WHERE id = ?`
+  ).run(taskId, flowRunId, workflowRunId, jobId, stepId, agentId, updatedAt, id);
 }
 
 // ── Repository Caches ───────────────────────────────────────────────────────
@@ -102,9 +112,9 @@ export function insertWorkspaceLock(
 ): void {
   db.prepare(`
     INSERT INTO workspace_locks
-      (id, workspace_id, mode, owner, expires_at, acquired_at)
+      (id, workspace_id, mode, owner, expires_at, acquired_at, last_heartbeat)
     VALUES
-      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at)
+      (@id, @workspace_id, @mode, @owner, @expires_at, @acquired_at, @last_heartbeat)
   `).run(row);
 }
 
@@ -112,9 +122,45 @@ export function getActiveLockForWorkspace(
   db: Database.Database,
   workspaceId: string
 ): WorkspaceLockRow | undefined {
+  const now = new Date().toISOString();
   return db
-    .prepare("SELECT * FROM workspace_locks WHERE workspace_id = ? ORDER BY acquired_at DESC LIMIT 1")
-    .get(workspaceId) as WorkspaceLockRow | undefined;
+    .prepare(
+      "SELECT * FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY acquired_at DESC LIMIT 1"
+    )
+    .get(workspaceId, now) as WorkspaceLockRow | undefined;
+}
+
+export function updateLockHeartbeat(
+  db: Database.Database,
+  workspaceId: string,
+  lastHeartbeat: string
+): boolean {
+  const result = db.prepare(
+    `UPDATE workspace_locks
+     SET last_heartbeat = ?
+     WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, workspaceId, lastHeartbeat);
+  return result.changes > 0;
+}
+
+export function releaseLockForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  releasedAt: string
+): void {
+  db.prepare(
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+  ).run(workspaceId, releasedAt);
+}
+
+export function deleteExpiredLocksForWorkspace(
+  db: Database.Database,
+  workspaceId: string,
+  expiredAt: string
+): void {
+  db.prepare(
+    "DELETE FROM workspace_locks WHERE workspace_id = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+  ).run(workspaceId, expiredAt);
 }
 
 export function deleteLockForWorkspace(
@@ -202,6 +248,21 @@ export function insertWorkspaceEvent(
     VALUES
       (@id, @workspace_id, @event, @data, @created_at)
   `).run(row);
+}
+
+export function migrateStatusColumn(db: Database.Database): void {
+  db.exec(`
+    UPDATE workspaces SET status = CASE status
+      WHEN 'created'  THEN 'CREATED'
+      WHEN 'prepared' THEN 'PREPARING'
+      WHEN 'locked'   THEN 'READY'
+      WHEN 'active'   THEN 'RUNNING'
+      WHEN 'archived' THEN 'ARCHIVED'
+      WHEN 'cleaned'  THEN 'CLEANED'
+      WHEN 'failed'   THEN 'FAILED'
+      ELSE status
+    END
+  `);
 }
 
 export function listEventsForWorkspace(

@@ -6,9 +6,11 @@ import {
   getWorkspaceById,
   insertWorkspaceLock,
   getActiveLockForWorkspace,
-  deleteLockForWorkspace,
+  releaseLockForWorkspace,
   updateWorkspaceStatus,
   insertWorkspaceEvent,
+  updateLockHeartbeat,
+  deleteExpiredLocksForWorkspace,
 } from "../db/queries.js";
 
 function now(): string {
@@ -30,6 +32,11 @@ function emitEvent(
   });
 }
 
+function isExpired(expiresAt: string | null): boolean {
+  if (expiresAt === null) return false;
+  return expiresAt <= now();
+}
+
 export function lockWorkspace(
   db: Database.Database,
   workspaceId: string,
@@ -42,39 +49,40 @@ export function lockWorkspace(
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
 
-  // Check for existing lock
-  const existingLock = getActiveLockForWorkspace(db, workspaceId);
-  if (existingLock) {
-    throw new ZigmaError(
-      "WORKSPACE_LOCK_CONFLICT",
-      `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
-      { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
-    );
-  }
-
-  const lockId = `lock_${uuidv4()}`;
-  const acquiredAt = now();
-
-  insertWorkspaceLock(db, {
-    id: lockId,
-    workspace_id: workspaceId,
-    mode,
-    owner,
-    expires_at: expiresAt ?? null,
-    acquired_at: acquiredAt,
+  const acquire = db.transaction((): WorkspaceLock => {
+    const existingLock = getActiveLockForWorkspace(db, workspaceId);
+    if (existingLock && !isExpired(existingLock.expires_at)) {
+      throw new ZigmaError(
+        "WORKSPACE_LOCK_CONFLICT",
+        `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
+        { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
+      );
+    }
+    const acquiredAt = now();
+    deleteExpiredLocksForWorkspace(db, workspaceId, acquiredAt);
+    const lockId = `lock_${uuidv4()}`;
+    insertWorkspaceLock(db, {
+      id: lockId,
+      workspace_id: workspaceId,
+      mode,
+      owner,
+      expires_at: expiresAt ?? null,
+      acquired_at: acquiredAt,
+      last_heartbeat: acquiredAt,
+    });
+    updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
+    emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
+    return {
+      id: lockId,
+      workspaceId,
+      mode,
+      owner,
+      expiresAt,
+      acquiredAt,
+      lastHeartbeat: acquiredAt,
+    };
   });
-
-  updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
-  emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
-
-  return {
-    id: lockId,
-    workspaceId,
-    mode,
-    owner,
-    expiresAt,
-    acquiredAt,
-  };
+  return acquire.immediate();
 }
 
 export function unlockWorkspace(
@@ -88,13 +96,11 @@ export function unlockWorkspace(
 
   const existingLock = getActiveLockForWorkspace(db, workspaceId);
   if (!existingLock) {
-    // Already unlocked — not an error, just a no-op with a note
     return;
   }
 
-  deleteLockForWorkspace(db, workspaceId);
+  releaseLockForWorkspace(db, workspaceId, now());
 
-  // Restore status to active if it was locked
   if (wsRow.status === "locked") {
     updateWorkspaceStatus(db, workspaceId, "active", now());
   }
@@ -102,6 +108,53 @@ export function unlockWorkspace(
   emitEvent(db, workspaceId, "workspace.unlocked", {
     previousOwner: existingLock.owner,
   });
+}
+
+export function heartbeat(
+  db: Database.Database,
+  workspaceId: string,
+  owner: string
+): WorkspaceLock {
+  const wsRow = getWorkspaceById(db, workspaceId);
+  if (!wsRow) {
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
+  }
+
+  const activeLock = getActiveLockForWorkspace(db, workspaceId);
+  if (!activeLock) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `No active lock found for workspace ${workspaceId}`,
+      { workspaceId }
+    );
+  }
+
+  if (activeLock.owner !== owner) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Lock owner mismatch for workspace ${workspaceId}: expected ${owner}, got ${activeLock.owner}`,
+      { workspaceId, expectedOwner: owner, actualOwner: activeLock.owner }
+    );
+  }
+
+  const heartbeatTime = now();
+  if (!updateLockHeartbeat(db, workspaceId, heartbeatTime)) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Lock expired before heartbeat for workspace ${workspaceId}`,
+      { workspaceId },
+    );
+  }
+
+  return {
+    id: activeLock.id,
+    workspaceId: activeLock.workspace_id,
+    mode: activeLock.mode as "read" | "write",
+    owner: activeLock.owner,
+    expiresAt: activeLock.expires_at ?? undefined,
+    acquiredAt: activeLock.acquired_at,
+    lastHeartbeat: heartbeatTime,
+  };
 }
 
 export function getLock(
@@ -117,5 +170,6 @@ export function getLock(
     owner: row.owner,
     expiresAt: row.expires_at ?? undefined,
     acquiredAt: row.acquired_at,
+    lastHeartbeat: row.last_heartbeat ?? undefined,
   };
 }

@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import { migrateStatusColumn } from "./queries.js";
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS workspaces (
@@ -7,13 +8,17 @@ CREATE TABLE IF NOT EXISTS workspaces (
   project_id TEXT,
   task_id TEXT,
   flow_run_id TEXT,
+  workflow_run_id TEXT,
+  job_id TEXT,
+  step_id TEXT,
+  agent_id TEXT,
   repository_url TEXT NOT NULL,
   base_ref TEXT NOT NULL,
   base_commit TEXT NOT NULL,
   branch TEXT NOT NULL,
   path TEXT NOT NULL,
   mode TEXT NOT NULL DEFAULT 'writable',
-  status TEXT NOT NULL DEFAULT 'created',
+  status TEXT NOT NULL DEFAULT 'CREATED',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -33,7 +38,8 @@ CREATE TABLE IF NOT EXISTS workspace_locks (
   mode TEXT NOT NULL,
   owner TEXT NOT NULL,
   expires_at TEXT,
-  acquired_at TEXT NOT NULL
+  acquired_at TEXT NOT NULL,
+  last_heartbeat TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workspace_snapshots (
@@ -73,6 +79,16 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
 
 const _dbMap = new Map<string, Database.Database>();
 
+function migrateLockLeaseColumns(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    const columns = db.pragma("table_info(workspace_locks)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "last_heartbeat")) {
+      db.exec("ALTER TABLE workspace_locks ADD COLUMN last_heartbeat TEXT");
+    }
+  });
+  migrate();
+}
+
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const existing = _dbMap.get(config.dbPath);
   if (existing) return existing;
@@ -80,6 +96,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
+  migrateLockLeaseColumns(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }
