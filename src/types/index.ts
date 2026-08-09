@@ -10,13 +10,15 @@ export interface Workspace {
   path: string;
   mode: "read-only" | "writable";
   status:
-    | "created"
-    | "prepared"
-    | "locked"
-    | "active"
-    | "archived"
-    | "cleaned"
-    | "failed";
+    | "CREATED"
+    | "PREPARING"
+    | "READY"
+    | "RUNNING"
+    | "WAIT_REVIEW"
+    | "MERGED"
+    | "CLEANED"
+    | "FAILED"
+    | "ARCHIVED";
   createdAt: string;
   updatedAt: string;
 }
