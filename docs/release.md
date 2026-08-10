@@ -4,9 +4,10 @@
 
 ## 首次发布前配置
 
-1. 确认 npm 上的包名 `zigma-workspace` 仍可用，并由有权发布该包的 npm 账户执行首次发布。
+1. 确认 npm 上的包名 `@zigma-ai/zigma-workspace` 仍可用，并由有权管理 `zigma-ai` scope 的 npm 账户执行首次发布或配置 trusted publisher。
 2. 在 GitHub 仓库创建名为 `npm-publish` 的 Environment。建议为该环境配置 required reviewers。
 3. 首次发布后，在 npm 包设置中添加 GitHub Actions trusted publisher：
+   - Package: `@zigma-ai/zigma-workspace`
    - Organization or user: `LummiGhost`
    - Repository: `zigma-workspace`
    - Workflow filename: `release.yml`
