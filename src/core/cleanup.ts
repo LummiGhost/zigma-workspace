@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { isWorkspaceState, transition } from "./state-machine.js";
 import {
   getWorkspaceById,
+  getActiveLockForWorkspace,
   updateWorkspaceStatus,
   listWorkspaces,
 } from "../db/queries.js";
@@ -40,6 +40,15 @@ export function cleanupWorkspace(
       removed: false,
       message: "Workspace is already cleaned",
     };
+  }
+
+  const activeLock = getActiveLockForWorkspace(db, workspaceId);
+  if (activeLock) {
+    throw new ZigmaError(
+      "WORKSPACE_LOCK_CONFLICT",
+      `Cannot clean workspace ${workspaceId} while it is locked by ${activeLock.owner}`,
+      { workspaceId, owner: activeLock.owner, mode: activeLock.mode },
+    );
   }
 
   const workspacePath = row.path;
@@ -84,9 +93,10 @@ export function cleanupWorkspace(
     }
   }
 
-  // Update status regardless of filesystem result
-  updateWorkspaceStatus(db, workspaceId, "cleaned", now());
-  emitWorkspaceEvent(db, workspaceId, "workspace.cleaned", { removed, message });
+  if (removed) {
+    updateWorkspaceStatus(db, workspaceId, "CLEANED", now());
+    emitWorkspaceEvent(db, workspaceId, "workspace.cleaned", { removed, message });
+  }
 
   return { workspaceId, path: workspacePath, removed, message };
 }

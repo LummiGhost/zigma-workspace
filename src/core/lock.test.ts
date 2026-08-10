@@ -5,6 +5,7 @@ vi.mock("../db/queries.js", () => ({
   getWorkspaceById: vi.fn(),
   insertWorkspaceLock: vi.fn(),
   getActiveLockForWorkspace: vi.fn(),
+  listActiveLocksForWorkspace: vi.fn(),
   deleteLockForWorkspace: vi.fn(),
   deleteExpiredLocksForWorkspace: vi.fn(),
   releaseLockForWorkspace: vi.fn(),
@@ -28,6 +29,12 @@ beforeEach(() => {
   });
   db = { transaction } as unknown as Database.Database;
   vi.mocked(queries.updateLockHeartbeat).mockReturnValue(true);
+  vi.mocked(queries.listActiveLocksForWorkspace).mockImplementation(() => {
+    const active = vi.mocked(queries.getActiveLockForWorkspace).getMockImplementation()
+      ? vi.mocked(queries.getActiveLockForWorkspace).getMockImplementation()!(db, "ws_1")
+      : undefined;
+    return active ? [active] : [];
+  });
 });
 
 // ── lockWorkspace ───────────────────────────────────────────────────────────
@@ -183,18 +190,13 @@ describe("lockWorkspace", () => {
   });
 
   describe("status transitions", () => {
-    it("should update workspace status to locked on acquisition", () => {
+    it("should not change lifecycle status on lock acquisition", () => {
       vi.mocked(queries.getWorkspaceById).mockReturnValue({ id: "ws_1", status: "active" } as any);
       vi.mocked(queries.getActiveLockForWorkspace).mockReturnValue(undefined);
 
       lockWorkspace(db, "ws_1", "write", "owner-1");
 
-      expect(queries.updateWorkspaceStatus).toHaveBeenCalledWith(
-        db,
-        "ws_1",
-        "locked",
-        expect.any(String)
-      );
+      expect(queries.updateWorkspaceStatus).not.toHaveBeenCalled();
     });
 
     it("should emit workspace.locked event on acquisition", () => {
@@ -236,7 +238,7 @@ describe("unlockWorkspace", () => {
       );
     });
 
-    it("should restore workspace status to active after unlock", () => {
+    it("should not change lifecycle status after unlock", () => {
       vi.mocked(queries.getWorkspaceById).mockReturnValue({ id: "ws_1", status: "locked" } as any);
       vi.mocked(queries.getActiveLockForWorkspace).mockReturnValue({
         id: "lock_1",
@@ -250,12 +252,7 @@ describe("unlockWorkspace", () => {
 
       unlockWorkspace(db, "ws_1");
 
-      expect(queries.updateWorkspaceStatus).toHaveBeenCalledWith(
-        db,
-        "ws_1",
-        "active",
-        expect.any(String)
-      );
+      expect(queries.updateWorkspaceStatus).not.toHaveBeenCalled();
     });
 
     it("should emit workspace.unlocked event", () => {
@@ -399,6 +396,7 @@ describe("heartbeat", () => {
       expect(queries.updateLockHeartbeat).toHaveBeenCalledWith(
         db,
         "ws_1",
+        "owner-1",
         expect.any(String)
       );
       expect(result.lastHeartbeat).toBeDefined();

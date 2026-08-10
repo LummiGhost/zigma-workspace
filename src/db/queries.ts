@@ -130,16 +130,29 @@ export function getActiveLockForWorkspace(
     .get(workspaceId, now) as WorkspaceLockRow | undefined;
 }
 
+export function listActiveLocksForWorkspace(
+  db: Database.Database,
+  workspaceId: string
+): WorkspaceLockRow[] {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      "SELECT * FROM workspace_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY acquired_at ASC"
+    )
+    .all(workspaceId, now) as WorkspaceLockRow[];
+}
+
 export function updateLockHeartbeat(
   db: Database.Database,
   workspaceId: string,
+  owner: string,
   lastHeartbeat: string
 ): boolean {
   const result = db.prepare(
     `UPDATE workspace_locks
      SET last_heartbeat = ?
-     WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)`
-  ).run(lastHeartbeat, workspaceId, lastHeartbeat);
+     WHERE workspace_id = ? AND owner = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, workspaceId, owner, lastHeartbeat);
   return result.changes > 0;
 }
 
@@ -260,6 +273,8 @@ export function migrateStatusColumn(db: Database.Database): void {
       WHEN 'archived' THEN 'ARCHIVED'
       WHEN 'cleaned'  THEN 'CLEANED'
       WHEN 'failed'   THEN 'FAILED'
+      WHEN 'ready'    THEN 'READY'
+      WHEN 'running'  THEN 'RUNNING'
       ELSE status
     END
   `);

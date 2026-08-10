@@ -9,15 +9,12 @@ import {
   listSnapshotsForWorkspace,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
-import { generatePatch, getHeadCommit } from "../git/index.js";
+import { generatePatch, getChangedFiles, getHeadCommit } from "../git/index.js";
 import { createArtifact } from "./artifact.js";
+import { filterFiles, readWorkspacePathFilter } from "./diff.js";
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function sha256(content: string): string {
-  return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
 }
 
 export function createSnapshot(
@@ -33,12 +30,17 @@ export function createSnapshot(
   const snapId = `snap_${uuidv4()}`;
   const ts = now();
   const headCommit = getHeadCommit(row.path);
+  const pathFilter = readWorkspacePathFilter(row.path);
 
   // Collect the patch before inserting anything so the snapshot kind is final.
   let snapshotKind: WorkspaceSnapshot["kind"] = "metadata-only";
   let patch: string | null = null;
   if (fs.existsSync(row.path)) {
-    const generatedPatch = generatePatch(row.path, row.base_commit);
+    const changedFiles = getChangedFiles(row.path, row.base_commit);
+    const filteredFiles = pathFilter ? filterFiles(changedFiles, pathFilter) : changedFiles;
+    const generatedPatch = filteredFiles.length > 0
+      ? generatePatch(row.path, row.base_commit, filteredFiles)
+      : "";
     if (generatedPatch.trim()) {
       patch = generatedPatch;
       snapshotKind = "diff";
@@ -79,8 +81,9 @@ export function createSnapshot(
     `${snapId}.metadata.json`,
   );
 
+  let patchArtifact: ReturnType<typeof createArtifact> | undefined;
   if (patch !== null) {
-    createArtifact(
+    patchArtifact = createArtifact(
       db,
       config,
       snapId,
@@ -91,22 +94,11 @@ export function createSnapshot(
     );
   }
 
-  const snapshotRow = {
-    id: snapId,
-    workspace_id: workspaceId,
-    kind: snapshotKind,
-    path: patchPath ?? metadataPath,
-    checksum: checksum ?? null,
-    created_at: ts,
-  };
-
-  insertWorkspaceSnapshot(db, snapshotRow);
-
   emitWorkspaceEvent(db, workspaceId, "workspace.snapshot.created", {
     snapshot_id: snapId,
     kind: snapshotKind,
-    patch_path: patchPath ?? null,
-    checksum: checksum ?? null,
+    patch_path: patchArtifact?.path ?? null,
+    checksum: patchArtifact?.checksum ?? null,
   });
 
   return {

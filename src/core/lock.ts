@@ -6,13 +6,19 @@ import {
   getWorkspaceById,
   insertWorkspaceLock,
   getActiveLockForWorkspace,
+  listActiveLocksForWorkspace,
   releaseLockForWorkspace,
-  updateWorkspaceStatus,
+  updateLockHeartbeat,
+  deleteExpiredLocksForWorkspace,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function isExpired(expiresAt: string | null): boolean {
+  return expiresAt !== null && expiresAt <= now();
 }
 
 export function lockWorkspace(
@@ -28,16 +34,20 @@ export function lockWorkspace(
   }
 
   const acquire = db.transaction((): WorkspaceLock => {
-    const existingLock = getActiveLockForWorkspace(db, workspaceId);
-    if (existingLock && !isExpired(existingLock.expires_at)) {
+    const acquiredAt = now();
+    deleteExpiredLocksForWorkspace(db, workspaceId, acquiredAt);
+    const activeLocks = listActiveLocksForWorkspace(db, workspaceId)
+      .filter((lock) => !isExpired(lock.expires_at));
+    const hasWriter = activeLocks.some((lock) => lock.mode === "write");
+    const conflicts = mode === "write" ? activeLocks.length > 0 : hasWriter;
+    const existingLock = activeLocks[0];
+    if (conflicts && existingLock) {
       throw new ZigmaError(
         "WORKSPACE_LOCK_CONFLICT",
         `Workspace ${workspaceId} is already locked by ${existingLock.owner} (mode: ${existingLock.mode}, acquired: ${existingLock.acquired_at})`,
-        { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at }
+        { workspaceId, owner: existingLock.owner, mode: existingLock.mode, acquiredAt: existingLock.acquired_at },
       );
     }
-    const acquiredAt = now();
-    deleteExpiredLocksForWorkspace(db, workspaceId, acquiredAt);
     const lockId = `lock_${uuidv4()}`;
     insertWorkspaceLock(db, {
       id: lockId,
@@ -48,8 +58,7 @@ export function lockWorkspace(
       acquired_at: acquiredAt,
       last_heartbeat: acquiredAt,
     });
-    updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
-    emitEvent(db, workspaceId, "workspace.locked", { mode, owner });
+    emitWorkspaceEvent(db, workspaceId, "workspace.locked", { mode, owner });
     return {
       id: lockId,
       workspaceId,
@@ -61,17 +70,7 @@ export function lockWorkspace(
     };
   });
 
-  updateWorkspaceStatus(db, workspaceId, "locked", acquiredAt);
-  emitWorkspaceEvent(db, workspaceId, "workspace.locked", { mode, owner });
-
-  return {
-    id: lockId,
-    workspaceId,
-    mode,
-    owner,
-    expiresAt,
-    acquiredAt,
-  };
+  return acquire();
 }
 
 export function unlockWorkspace(
@@ -89,10 +88,6 @@ export function unlockWorkspace(
   }
 
   releaseLockForWorkspace(db, workspaceId, now());
-
-  if (wsRow.status === "locked") {
-    updateWorkspaceStatus(db, workspaceId, "active", now());
-  }
 
   emitWorkspaceEvent(db, workspaceId, "workspace.unlocked", {
     previous_owner: existingLock.owner,
@@ -127,7 +122,7 @@ export function heartbeat(
   }
 
   const heartbeatTime = now();
-  if (!updateLockHeartbeat(db, workspaceId, heartbeatTime)) {
+  if (!updateLockHeartbeat(db, workspaceId, owner, heartbeatTime)) {
     throw new ZigmaError(
       "WORKSPACE_LOCK_CONFLICT",
       `Lock expired before heartbeat for workspace ${workspaceId}`,

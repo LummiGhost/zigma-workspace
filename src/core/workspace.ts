@@ -12,7 +12,7 @@ import type {
   RepositoryCacheRow,
 } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
-import { isWorkspaceState, transition } from "./state-machine.js";
+import { isWorkspaceState, migrateLegacyStatus, transition } from "./state-machine.js";
 import {
   insertWorkspace,
   getWorkspaceById,
@@ -40,6 +40,9 @@ function now(): string {
 }
 
 function rowToWorkspace(row: WorkspaceRow): Workspace {
+  const status = isWorkspaceState(row.status)
+    ? row.status
+    : migrateLegacyStatus(row.status);
   return {
     id: row.id,
     projectId: row.project_id ?? undefined,
@@ -55,7 +58,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     branch: row.branch,
     path: row.path,
     mode: row.mode as "read-only" | "writable",
-    status: row.status as Workspace["status"],
+    status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -182,8 +185,9 @@ export function createWorkspace(
   const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
 
-  // Mark as prepared
-  updateWorkspaceStatus(db, wsId, "prepared", now());
+  // Advance the lifecycle only after the worktree and manifest are ready.
+  updateWorkspaceStatus(db, wsId, transition("CREATED", "PREPARING"), now());
+  updateWorkspaceStatus(db, wsId, transition("PREPARING", "READY"), now());
   emitWorkspaceEvent(db, wsId, "workspace.created", { branch, base_commit: baseCommit });
 
   const finalRow = getWorkspaceById(db, wsId);
@@ -202,6 +206,14 @@ export function bindRun(
   }
 
   const ts = now();
+  if (row.status !== "READY" && row.status !== "RUNNING") {
+    throw new ZigmaError(
+      "INVALID_INPUT",
+      `Workspace ${input.workspaceId} cannot be bound from status ${row.status}`,
+      { workspaceId: input.workspaceId, status: row.status },
+    );
+  }
+
   updateWorkspaceBindings(
     db,
     input.workspaceId,
@@ -213,6 +225,10 @@ export function bindRun(
     input.agentId ?? row.agent_id,
     ts
   );
+
+  if (row.status === "READY") {
+    updateWorkspaceStatus(db, input.workspaceId, transition("READY", "RUNNING"), ts);
+  }
 
   emitWorkspaceEvent(db, input.workspaceId, "workspace.bound", {
     task_id: input.taskId ?? row.task_id ?? null,

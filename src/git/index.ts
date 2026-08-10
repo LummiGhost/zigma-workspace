@@ -234,9 +234,16 @@ export function getUntrackedFiles(workspacePath: string): string[] {
 /**
  * Get diff stat summary.
  */
-export function getDiffStat(workspacePath: string, baseCommit: string): string {
+export function getDiffStat(
+  workspacePath: string,
+  baseCommit: string,
+  paths?: string[],
+): string {
   try {
-    return runGit(["diff", "--stat", baseCommit], workspacePath);
+    return runGit(
+      ["diff", "--stat", baseCommit, ...(paths && paths.length > 0 ? ["--", ...paths] : [])],
+      workspacePath,
+    );
   } catch {
     return "";
   }
@@ -246,9 +253,16 @@ export function getDiffStat(workspacePath: string, baseCommit: string): string {
  * Generate a full patch (diff) from the base commit.
  * Returns the patch content as a string.
  */
-export function generatePatch(workspacePath: string, baseCommit: string): string {
+export function generatePatch(
+  workspacePath: string,
+  baseCommit: string,
+  paths?: string[],
+): string {
   try {
-    return runGit(["diff", baseCommit], workspacePath);
+    return runGit(
+      ["diff", baseCommit, ...(paths && paths.length > 0 ? ["--", ...paths] : [])],
+      workspacePath,
+    );
   } catch {
     return "";
   }

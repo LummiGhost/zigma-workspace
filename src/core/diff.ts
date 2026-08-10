@@ -6,6 +6,7 @@ import type { WorkspaceDiff, ZigmaWorkspaceConfig } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
 import { getWorkspaceById } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
+import { createIgnoreMatcher } from "./ignore-matcher.js";
 import {
   getStatus,
   getChangedFiles,
@@ -24,19 +25,45 @@ export interface PathFilter {
   deniedPaths?: string[];
 }
 
+function normalizeRepositoryPath(file: string): string | null {
+  const normalized = path.posix.normalize(file.replace(/\\/g, "/")).replace(/^\.\//, "");
+  if (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    path.posix.isAbsolute(normalized)
+  ) {
+    return null;
+  }
+  return normalized === "." ? "" : normalized;
+}
+
+function normalizeFilterPath(candidate: string): string | null {
+  const normalized = path.posix.normalize(candidate.replace(/\\/g, "/"))
+    .replace(/^\.\//, "")
+    .replace(/\/$/, "");
+  if (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    path.posix.isAbsolute(normalized)
+  ) {
+    return null;
+  }
+  return normalized === "." ? "" : normalized;
+}
+
 export function filterFiles(files: string[], filter: PathFilter): string[] {
   let result = files;
 
   if (filter.allowedPaths && filter.allowedPaths.length > 0) {
     const allowed = filter.allowedPaths
-      .map((candidate) => path.posix.normalize(candidate.replace(/\\/g, "/")).replace(/^\.\//, "").replace(/\/$/, ""))
-      .filter((candidate) => candidate !== "" && candidate !== ".." && !candidate.startsWith("../") && !path.posix.isAbsolute(candidate));
+      .map(normalizeFilterPath)
+      .filter((candidate): candidate is string => candidate !== null);
     result = result.filter((file) => {
-      const normalized = path.posix.normalize(file.replace(/\\/g, "/")).replace(/^\.\//, "");
-      if (normalized === ".." || normalized.startsWith("../") || path.posix.isAbsolute(normalized)) {
-        return false;
-      }
-      return allowed.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
+      const normalized = normalizeRepositoryPath(file);
+      if (normalized === null) return false;
+      return allowed.some((prefix) =>
+        prefix === "" || normalized === prefix || normalized.startsWith(`${prefix}/`),
+      );
     });
   }
 
@@ -46,6 +73,38 @@ export function filterFiles(files: string[], filter: PathFilter): string[] {
   }
 
   return result;
+}
+
+export function readWorkspacePathFilter(workspacePath: string): PathFilter | undefined {
+  const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
+  if (!fs.existsSync(manifestPath)) return undefined;
+  try {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as {
+      allowed_paths?: unknown;
+      denied_paths?: unknown;
+    };
+    return {
+      allowedPaths: Array.isArray(manifest.allowed_paths)
+        ? manifest.allowed_paths.filter((value): value is string => typeof value === "string")
+        : undefined,
+      deniedPaths: Array.isArray(manifest.denied_paths)
+        ? manifest.denied_paths.filter((value): value is string => typeof value === "string")
+        : undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function filterStatusText(statusText: string, filter: PathFilter): string {
+  return statusText
+    .split("\n")
+    .filter((line) => {
+      if (!line.trim()) return false;
+      const pathPart = line.slice(3).split(" -> ").pop()?.trim() ?? "";
+      return filterFiles([pathPart], filter).length > 0;
+    })
+    .join("\n");
 }
 
 export function collectDiff(
@@ -67,21 +126,20 @@ export function collectDiff(
   const baseCommit = row.base_commit;
   const workspacePath = row.path;
 
-  const statusText = getStatus(workspacePath);
+  const rawStatusText = getStatus(workspacePath);
   let changedFiles = getChangedFiles(workspacePath, baseCommit);
   let untrackedFiles = getUntrackedFiles(workspacePath);
-  const diffStat = getDiffStat(workspacePath, baseCommit);
-  const headCommit = getHeadCommit(workspacePath);
-  let patch = generatePatch(workspacePath, baseCommit);
-
-  // Apply path filtering
-  if (pathFilter) {
-    changedFiles = filterFiles(changedFiles, pathFilter);
-    untrackedFiles = filterFiles(untrackedFiles, pathFilter);
-    if (changedFiles.length === 0 && untrackedFiles.length === 0) {
-      patch = '';
-    }
+  const effectiveFilter = pathFilter ?? readWorkspacePathFilter(workspacePath);
+  if (effectiveFilter) {
+    changedFiles = filterFiles(changedFiles, effectiveFilter);
+    untrackedFiles = filterFiles(untrackedFiles, effectiveFilter);
   }
+  const diffStat = getDiffStat(workspacePath, baseCommit, effectiveFilter ? changedFiles : undefined);
+  const headCommit = getHeadCommit(workspacePath);
+  const patch = effectiveFilter && changedFiles.length === 0
+    ? ""
+    : generatePatch(workspacePath, baseCommit, effectiveFilter ? changedFiles : undefined);
+  const statusText = effectiveFilter ? filterStatusText(rawStatusText, effectiveFilter) : rawStatusText;
 
   // Build summary
   const totalChanged = changedFiles.length;
@@ -110,8 +168,6 @@ export function collectDiff(
       const patchFileName = `${workspaceId}-${Date.now()}.patch`;
       resolvedPatchPath = path.join(config.snapshotsDir, patchFileName);
     }
-  } else if (patchOutPath) {
-    resolvedPatchPath = patchOutPath;
   }
 
   if (resolvedPatchPath && patch) {

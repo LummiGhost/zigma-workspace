@@ -9,6 +9,7 @@ import { createSnapshot } from "./snapshot.js";
 
 vi.mock("../git/index.js", () => ({
   getHeadCommit: vi.fn(() => "head123"),
+  getChangedFiles: vi.fn(() => ["a"]),
   generatePatch: vi.fn(() => "diff --git a/a b/a\n"),
 }));
 
@@ -41,13 +42,17 @@ describe("createSnapshot integration", () => {
       project_id: null,
       task_id: null,
       flow_run_id: null,
+      workflow_run_id: null,
+      job_id: null,
+      step_id: null,
+      agent_id: null,
       repository_url: "https://example.test/repo.git",
       base_ref: "main",
       base_commit: "base123",
       branch: "feature",
       path: workspacePath,
       mode: "writable",
-      status: "active",
+      status: "RUNNING",
       created_at: "2024-01-01T00:00:00.000Z",
       updated_at: "2024-01-01T00:00:00.000Z",
     });

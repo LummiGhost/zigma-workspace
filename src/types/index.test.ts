@@ -19,7 +19,7 @@ describe("Types - workflow execution context", () => {
         branch: "test",
         path: "/tmp/ws",
         mode: "writable",
-        status: "active",
+        status: "RUNNING",
         workflowRunId: "wr_001",
         jobId: "job_001",
         stepId: "step_001",
@@ -42,7 +42,7 @@ describe("Types - workflow execution context", () => {
         branch: "test",
         path: "/tmp/ws2",
         mode: "read-only",
-        status: "created",
+        status: "CREATED",
         createdAt: "2025-01-01T00:00:00.000Z",
         updatedAt: "2025-01-01T00:00:00.000Z",
       };
@@ -70,7 +70,7 @@ describe("Types - workflow execution context", () => {
         branch: "test",
         path: "/tmp/ws",
         mode: "writable",
-        status: "active",
+        status: "RUNNING",
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
       };
@@ -96,7 +96,7 @@ describe("Types - workflow execution context", () => {
         branch: "test",
         path: "/tmp/ws2",
         mode: "read-only",
-        status: "created",
+        status: "CREATED",
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
       };

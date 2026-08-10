@@ -98,6 +98,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.pragma("foreign_keys = ON");
   db.exec(SCHEMA_SQL);
   migrateWorkspaceEventActor(db);
+  migrateStatusColumn(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }

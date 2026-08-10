@@ -115,7 +115,7 @@ describe("Workspace core - workflow execution context", () => {
       expect(ws.repositoryUrl).toBe("https://github.com/test/repo");
       expect(ws.baseRef).toBe("main");
       expect(ws.mode).toBe("writable");
-      expect(ws.status).toBe("active");
+      expect(ws.status).toBe("RUNNING");
     });
   });
 
