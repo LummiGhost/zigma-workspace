@@ -15,7 +15,7 @@
 4. 为仓库的 `main` 分支启用保护规则，并将 CI 的三个 `validate` matrix job 设为必需检查。
 5. 选择并添加项目许可证；在此之前不要把包描述为开源软件。
 
-trusted publishing 使用 GitHub OIDC，不需要在仓库中保存长期 `NPM_TOKEN`。发布任务使用 Node.js 24，满足 npm trusted publishing 对 Node.js 和 npm CLI 的版本要求。
+trusted publishing 使用 GitHub OIDC，不需要在仓库中保存长期 `NPM_TOKEN`。发布任务先使用 Node.js 22 安装依赖并运行验证（`better-sqlite3@9` 尚未提供 Node.js 24 的预编译包），再切换到 Node.js 24 使用 npm trusted publishing 发布已经生成的包归档。
 
 ## 发布步骤
 

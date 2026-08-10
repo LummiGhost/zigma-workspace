@@ -17,12 +17,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js and npm registry
+      - name: Set up Node.js for dependency installation
         uses: actions/setup-node@v6
         with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org/
-          package-manager-cache: false
+          node-version: 22
 
       - name: Require tag and package versions to match
         run: node -e "const expected='v'+require('./package.json').version; if(process.env.GITHUB_REF_NAME!==expected){console.error('Expected tag '+expected+', received '+process.env.GITHUB_REF_NAME); process.exit(1)}"
@@ -46,8 +44,15 @@ jobs:
           path: "*.tgz"
           if-no-files-found: error
 
+      - name: Set up Node.js and npm registry for trusted publishing
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org/
+          package-manager-cache: false
+
       - name: Publish to npm with trusted publishing
-        run: npm publish
+        run: npm publish ./*.tgz
 
       - name: Create GitHub release
         env:
