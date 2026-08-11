@@ -27,16 +27,19 @@ describe("WorkspaceState", () => {
       "READY",
       "RUNNING",
       "WAIT_REVIEW",
+      "MERGING",
+      "CONFLICT",
       "MERGED",
       "CLEANED",
+      "CLEANUP_FAILED",
       "FAILED",
       "ARCHIVED",
     ];
     expect(WorkspaceStates).toEqual(expected);
   });
 
-  it("should have exactly 9 states", () => {
-    expect(WorkspaceStates).toHaveLength(9);
+  it("should have exactly 12 states", () => {
+    expect(WorkspaceStates).toHaveLength(12);
   });
 });
 

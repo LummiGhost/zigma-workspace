@@ -19,8 +19,11 @@ export interface Workspace {
     | "READY"
     | "RUNNING"
     | "WAIT_REVIEW"
+    | "MERGING"
+    | "CONFLICT"
     | "MERGED"
     | "CLEANED"
+    | "CLEANUP_FAILED"
     | "FAILED"
     | "ARCHIVED";
   createdAt: string;
@@ -287,7 +290,14 @@ export type ZigmaErrorCode =
   | "GIT_ERROR"
   | "INVALID_INPUT"
   | "OPERATION_ID_CONFLICT"
-  | "INTERNAL_ERROR";
+  | "INTERNAL_ERROR"
+  | "WORKSPACE_STATE_CONFLICT"
+  | "WORKSPACE_HEAD_CONFLICT"
+  | "WORKSPACE_INTEGRATION_CONFLICT"
+  | "WORKSPACE_CLEANUP_FAILED"
+  | "WORKSPACE_OPERATION_INCOMPLETE"
+  | "WORKSPACE_LOCK_OWNER_MISMATCH"
+  | "WORKSPACE_LOCK_EXPIRED";
 
 export class ZigmaError extends Error {
   readonly code: ZigmaErrorCode;
@@ -318,3 +328,182 @@ export interface JsonErrorResponse {
 }
 
 export type JsonResponse<T = unknown> = JsonOkResponse<T> | JsonErrorResponse;
+
+// ── Operation journal ────────────────────────────────────────────────────────
+
+export const OPERATION_COMMANDS = [
+  "create",
+  "commit",
+  "integrate",
+  "publish",
+  "cleanup",
+  "abort_integration",
+] as const;
+
+export type OperationCommand = (typeof OPERATION_COMMANDS)[number];
+
+export type OperationStatus = "started" | "completed" | "failed";
+
+export interface OperationJournalRow {
+  operation_id: string;
+  workspace_id: string;
+  command: OperationCommand;
+  status: OperationStatus;
+  input_hash: string;
+  result_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Integration lock ─────────────────────────────────────────────────────────
+
+export interface IntegrationLock {
+  id: string;
+  workspaceId: string;
+  owner: string;
+  expiresAt: string | null;
+  acquiredAt: string;
+  lastHeartbeat: string;
+}
+
+export interface IntegrationLockRow {
+  id: string;
+  workspace_id: string;
+  owner: string;
+  expires_at: string | null;
+  acquired_at: string;
+  last_heartbeat: string;
+}
+
+// ── Commit ───────────────────────────────────────────────────────────────────
+
+export interface CommitWorkspaceInput {
+  operationId: string;
+  workspaceId: string;
+  message?: string;
+  expectedState?: string;
+  expectedHead?: string;
+}
+
+export interface CommitWorkspaceResult {
+  operationId: string;
+  workspaceId: string;
+  baseCommit: string;
+  headCommit: string;
+  changedFiles: string[];
+  evidenceDigest: string;
+  noOp: boolean;
+}
+
+// ── Integrate ────────────────────────────────────────────────────────────────
+
+export interface IntegrateWorkspaceInput {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  expectedHead?: string;
+  lockOwner: string;
+  lockExpiresAt?: string;
+}
+
+export interface IntegrateWorkspaceResult {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  sourceCommit: string;
+  previousTargetHead: string;
+  resultingCommit: string;
+  merged: boolean;
+}
+
+export interface IntegrateConflictResult {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  sourceCommit: string;
+  conflictFiles: string[];
+  message: string;
+}
+
+// ── Publish ──────────────────────────────────────────────────────────────────
+
+export type PublishStrategy = "branch" | "merge" | "fast-forward";
+
+export interface PublishWorkspaceInput {
+  operationId: string;
+  workspaceId: string;
+  strategy: PublishStrategy;
+  targetRef: string;
+  expectedHead?: string;
+}
+
+export interface PublishWorkspaceResult {
+  operationId: string;
+  workspaceId: string;
+  strategy: PublishStrategy;
+  resultingRef: string;
+  resultingCommit: string;
+  previousRef?: string;
+}
+
+// ── Abort ────────────────────────────────────────────────────────────────────
+
+export interface AbortIntegrationInput {
+  operationId: string;
+  workspaceId: string;
+  reason?: string;
+}
+
+export interface AbortIntegrationResult {
+  operationId: string;
+  workspaceId: string;
+  aborted: boolean;
+  message: string;
+}
+
+// ── Reconcile ────────────────────────────────────────────────────────────────
+
+export type ReconciledStatus = "complete" | "incomplete" | "orphaned" | "inconsistent";
+
+export interface ReconciledOperation {
+  operationId: string;
+  command: OperationCommand;
+  status: OperationStatus;
+  inputHash: string;
+  resultJson: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReconcileWorkspaceInput {
+  workspaceId: string;
+}
+
+export interface ReconcileWorkspaceResult {
+  workspaceId: string;
+  registryStatus: string;
+  directoryExists: boolean;
+  gitHead: string | null;
+  manifestExists: boolean;
+  operations: ReconciledOperation[];
+  reconciledStatus: ReconciledStatus;
+  recommendation: string;
+}
+
+// ── Cleanup strict ───────────────────────────────────────────────────────────
+
+export interface CleanupWorkspaceStrictInput {
+  operationId: string;
+  workspaceId: string;
+  force?: boolean;
+}
+
+export interface CleanupWorkspaceStrictResult {
+  operationId: string;
+  workspaceId: string;
+  path: string;
+  removed: boolean;
+  status: "CLEANED" | "CLEANUP_FAILED";
+  message: string;
+  blockers?: string[];
+}

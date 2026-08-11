@@ -293,14 +293,235 @@ interface CleanupResult {
 
 ```ts
 type WorkspaceStatus =
-  | "created"
-  | "prepared"
-  | "locked"
-  | "active"
-  | "archived"
-  | "cleaned"
-  | "failed";
+  | "CREATED"
+  | "PREPARING"
+  | "READY"
+  | "RUNNING"
+  | "WAIT_REVIEW"
+  | "MERGING"
+  | "CONFLICT"
+  | "MERGED"
+  | "CLEANED"
+  | "CLEANUP_FAILED"
+  | "FAILED"
+  | "ARCHIVED";
 ```
 
-ID 由 UUID v4 加前缀构成：`ws_`、`cache_`、`lock_`、`snap_`、`evt_`。时间字段使用 `new Date().toISOString()` 生成的 UTC ISO 8601 字符串。
+ID 由 UUID v4 加前缀构成：`ws_`、`cache_`、`lock_`、`snap_`、`evt_`、`ilock_`。时间字段使用 `new Date().toISOString()` 生成的 UTC ISO 8601 字符串。
+
+## Commit API
+
+模块：`src/core/commit.ts`
+
+### `commitWorkspace(db, input): CommitWorkspaceResult`
+
+```ts
+interface CommitWorkspaceInput {
+  operationId: string;
+  workspaceId: string;
+  message?: string;
+  expectedState?: string;
+  expectedHead?: string;
+}
+
+interface CommitWorkspaceResult {
+  operationId: string;
+  workspaceId: string;
+  baseCommit: string;
+  headCommit: string;
+  changedFiles: string[];
+  evidenceDigest: string;
+  noOp: boolean;
+}
+```
+
+使用 `git add --all` 捕获所有变更（tracked、untracked、rename、delete、binary），然后创建 commit。无变更时返回 no-op。相同 operation ID + 相同输入返回首次结果（幂等）；不同输入返回 `OPERATION_ID_CONFLICT` 错误。expectedState/expectedHead 不匹配时分别抛出 `WORKSPACE_STATE_CONFLICT` 或 `WORKSPACE_HEAD_CONFLICT`。
+
+## Integrate API
+
+模块：`src/core/integrate.ts`
+
+### `integrateWorkspace(db, input): IntegrateWorkspaceResult | IntegrateConflictResult`
+
+```ts
+interface IntegrateWorkspaceInput {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  expectedHead?: string;
+  lockOwner: string;
+  lockExpiresAt?: string;
+}
+
+interface IntegrateWorkspaceResult {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  sourceCommit: string;
+  previousTargetHead: string;
+  resultingCommit: string;
+  merged: boolean;
+}
+
+interface IntegrateConflictResult {
+  operationId: string;
+  sourceWorkspaceId: string;
+  targetWorkspaceId: string;
+  sourceCommit: string;
+  conflictFiles: string[];
+  message: string;
+}
+```
+
+将 source Job commit 合并到 target Run workspace。先获取 integration lock，再用 `--no-ff` 合并。冲突时自动 abort merge 恢复 target 干净状态，返回结构化冲突信息。source commit 已是 target 的祖先时返回 `merged: false`（已合并）。重复调用不产生重复 merge commit。
+
+### `abortIntegration(db, input): AbortIntegrationResult`
+
+```ts
+interface AbortIntegrationInput {
+  operationId: string;
+  workspaceId: string;
+  reason?: string;
+}
+
+interface AbortIntegrationResult {
+  operationId: string;
+  workspaceId: string;
+  aborted: boolean;
+  message: string;
+}
+```
+
+中止集成操作，将 MERGING 或 CONFLICT 状态重置为 RUNNING。
+
+## Publish API
+
+模块：`src/core/publish.ts`
+
+### `publishWorkspace(db, input): PublishWorkspaceResult`
+
+```ts
+type PublishStrategy = "branch" | "merge" | "fast-forward";
+
+interface PublishWorkspaceInput {
+  operationId: string;
+  workspaceId: string;
+  strategy: PublishStrategy;
+  targetRef: string;
+  expectedHead?: string;
+}
+
+interface PublishWorkspaceResult {
+  operationId: string;
+  workspaceId: string;
+  strategy: PublishStrategy;
+  resultingRef: string;
+  resultingCommit: string;
+  previousRef?: string;
+}
+```
+
+将 workspace 变更发布到目标 ref。首版支持 `branch` 策略（push 到远程分支）。dirty working tree 上拒绝操作。expectedHead 不匹配时抛出 `WORKSPACE_HEAD_CONFLICT`。`merge` 和 `fast-forward` 策略暂未实现。
+
+## Reconcile API
+
+模块：`src/core/reconcile.ts`
+
+### `reconcileWorkspace(db, input): ReconcileWorkspaceResult`
+
+```ts
+interface ReconcileWorkspaceInput {
+  workspaceId: string;
+}
+
+interface ReconcileWorkspaceResult {
+  workspaceId: string;
+  registryStatus: string;
+  directoryExists: boolean;
+  gitHead: string | null;
+  manifestExists: boolean;
+  operations: ReconciledOperation[];
+  reconciledStatus: ReconciledStatus;
+  recommendation: string;
+}
+
+type ReconciledStatus = "complete" | "incomplete" | "orphaned" | "inconsistent";
+```
+
+根据 registry、文件系统、Git HEAD 和 operation journal 综合判断 workspace 实际完成度，给出建议操作。
+
+## Cleanup Strict API
+
+模块：`src/core/cleanup.ts`
+
+### `cleanupWorkspaceStrict(db, config, input): CleanupWorkspaceStrictResult`
+
+```ts
+interface CleanupWorkspaceStrictInput {
+  operationId: string;
+  workspaceId: string;
+  force?: boolean;
+}
+
+interface CleanupWorkspaceStrictResult {
+  operationId: string;
+  workspaceId: string;
+  path: string;
+  removed: boolean;
+  status: "CLEANED" | "CLEANUP_FAILED";
+  message: string;
+  blockers?: string[];
+}
+```
+
+严格清理：只有 worktree registration 和目录确认移除后才进入 CLEANED。删除失败返回 CLEANUP_FAILED 和 blocker 列表。重复清理幂等。能诊断 Windows 文件占用。
+
+## Integration Lock API
+
+模块：`src/core/integration-lock.ts`
+
+### `acquireIntegrationLock(db, workspaceId, owner, expiresAt?): IntegrationLock`
+
+```ts
+interface IntegrationLock {
+  id: string;
+  workspaceId: string;
+  owner: string;
+  expiresAt: string | null;
+  acquiredAt: string;
+  lastHeartbeat: string;
+}
+```
+
+原子 compare-and-acquire。同一 owner 重入时延长 lease。锁已过期时自动接管。其他 owner 持有 active lock 时抛出 `WORKSPACE_LOCK_CONFLICT`。
+
+### `releaseIntegrationLock(db, workspaceId, owner): void`
+
+释放 integration lock。验证 owner，owner 不匹配时抛出 `WORKSPACE_LOCK_OWNER_MISMATCH`。重复释放幂等。
+
+### `takeoverIntegrationLock(db, workspaceId, newOwner, expiresAt?): IntegrationLock`
+
+接管过期锁。锁仍 active 时抛出 `WORKSPACE_LOCK_CONFLICT`。
+
+### `heartbeatIntegrationLock(db, workspaceId, owner): IntegrationLock`
+
+发送心跳延长 lease。验证 owner，owner 不匹配或锁已过期时抛出错误。
+
+### `getIntegrationLockState(db, workspaceId): IntegrationLock | null`
+
+查询当前 integration lock 状态。
+
+## 错误码
+
+新增错误码（v0.3）：
+
+| 错误码 | 触发场景 |
+| --- | --- |
+| `WORKSPACE_STATE_CONFLICT` | expectedState 与实际状态不匹配 |
+| `WORKSPACE_HEAD_CONFLICT` | expectedHead 与实际 HEAD 不匹配 |
+| `WORKSPACE_INTEGRATION_CONFLICT` | 集成合并冲突 |
+| `WORKSPACE_CLEANUP_FAILED` | 严格清理失败（目录未删除） |
+| `WORKSPACE_OPERATION_INCOMPLETE` | 操作未完成（如无 HEAD commit） |
+| `WORKSPACE_LOCK_OWNER_MISMATCH` | Lock owner 与调用者不匹配 |
+| `WORKSPACE_LOCK_EXPIRED` | Lock 已过期 |
 

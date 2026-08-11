@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import type Database from "better-sqlite3";
-import type { ZigmaWorkspaceConfig } from "../types/index.js";
+import type {
+  ZigmaWorkspaceConfig,
+  CleanupWorkspaceStrictInput,
+  CleanupWorkspaceStrictResult,
+  OperationJournalRow,
+} from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
 import {
   getWorkspaceById,
@@ -8,7 +14,14 @@ import {
   updateWorkspaceStatus,
   listWorkspaces,
 } from "../db/queries.js";
+import {
+  getIdempotencyRecord,
+  insertIdempotencyRecord,
+  insertOperationJournal,
+  updateOperationJournalStatus,
+} from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
+import { transition } from "./state-machine.js";
 import { removeWorktree, listWorktrees } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 
@@ -161,4 +174,191 @@ export function detectOrphanWorktrees(
   }
 
   return orphans;
+}
+
+function hashInput(input: unknown): string {
+  return crypto.createHash("sha256").update(JSON.stringify(input), "utf-8").digest("hex");
+}
+
+/**
+ * Strict cleanup: only transitions to CLEANED after worktree registration
+ * AND directory are confirmed removed.
+ *
+ * - Delete failure returns non-success with CLEANUP_FAILED status.
+ * - Repeat cleanup is idempotent.
+ * - Handles Windows file locking with diagnosable blockers.
+ * - Same operation ID retry is safe (idempotent).
+ */
+export function cleanupWorkspaceStrict(
+  db: Database.Database,
+  config: ZigmaWorkspaceConfig,
+  input: CleanupWorkspaceStrictInput,
+): CleanupWorkspaceStrictResult {
+  const { operationId, workspaceId, force } = input;
+
+  // Check idempotency
+  const inputHash = hashInput(input);
+  const idempotent = getIdempotencyRecord(db, operationId);
+  if (idempotent) {
+    if (idempotent.input_hash !== inputHash) {
+      throw new ZigmaError(
+        "OPERATION_ID_CONFLICT",
+        `Operation ${operationId} already executed with different input`,
+        { operationId, command: idempotent.command },
+      );
+    }
+    return JSON.parse(idempotent.result_json) as CleanupWorkspaceStrictResult;
+  }
+
+  const row = getWorkspaceById(db, workspaceId);
+  if (!row) {
+    throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
+  }
+
+  if (row.status === "CLEANED") {
+    return {
+      operationId,
+      workspaceId,
+      path: row.path,
+      removed: true,
+      status: "CLEANED",
+      message: "Workspace is already cleaned",
+    };
+  }
+
+  const activeLock = getActiveLockForWorkspace(db, workspaceId);
+  if (activeLock) {
+    if (!force) {
+      throw new ZigmaError(
+        "WORKSPACE_LOCK_CONFLICT",
+        `Cannot clean workspace ${workspaceId} while it is locked by ${activeLock.owner}`,
+        { workspaceId, owner: activeLock.owner, mode: activeLock.mode },
+      );
+    }
+  }
+
+  const ts = now();
+
+  // Record operation started
+  const journalRow: OperationJournalRow = {
+    operation_id: operationId,
+    workspace_id: workspaceId,
+    command: "cleanup",
+    status: "started",
+    input_hash: inputHash,
+    result_json: null,
+    created_at: ts,
+    updated_at: ts,
+  };
+  insertOperationJournal(db, journalRow);
+
+  const workspacePath = row.path;
+  const blockers: string[] = [];
+  let removed = false;
+  let message = "";
+
+  // Attempt worktree removal
+  const cacheRow = getRepositoryCacheByUrl(db, row.repository_url);
+  if (cacheRow && fs.existsSync(cacheRow.mirror_path)) {
+    try {
+      removeWorktree(cacheRow.mirror_path, workspacePath);
+      removed = !fs.existsSync(workspacePath);
+      if (removed) {
+        message = "Worktree removed from mirror and filesystem";
+      } else {
+        blockers.push("Worktree remove command succeeded but directory still exists");
+      }
+    } catch (err) {
+      blockers.push(`Worktree removal failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Try direct filesystem removal
+      if (fs.existsSync(workspacePath)) {
+        try {
+          fs.rmSync(workspacePath, { recursive: true, force: true });
+          removed = !fs.existsSync(workspacePath);
+          if (removed) {
+            message = "Workspace directory removed directly (worktree prune failed)";
+          }
+        } catch (rmErr) {
+          blockers.push(`Direct directory removal failed: ${rmErr instanceof Error ? rmErr.message : String(rmErr)}`);
+        }
+      }
+    }
+  } else {
+    // No mirror — just remove the directory
+    if (fs.existsSync(workspacePath)) {
+      try {
+        fs.rmSync(workspacePath, { recursive: true, force: true });
+        removed = !fs.existsSync(workspacePath);
+        if (removed) {
+          message = "Workspace directory removed (no mirror found)";
+        }
+      } catch (err) {
+        blockers.push(`Directory removal failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    } else {
+      removed = true;
+      message = "Workspace directory already absent from filesystem";
+    }
+  }
+
+  if (removed) {
+    // Only transition to CLEANED when directory is confirmed gone
+    updateWorkspaceStatus(db, workspaceId, "CLEANED", now());
+    emitWorkspaceEvent(db, workspaceId, "workspace.cleaned", { removed, message });
+
+    const result: CleanupWorkspaceStrictResult = {
+      operationId,
+      workspaceId,
+      path: workspacePath,
+      removed: true,
+      status: "CLEANED",
+      message,
+    };
+
+    const resultJson = JSON.stringify(result);
+    updateOperationJournalStatus(db, operationId, workspaceId, "completed", resultJson, now());
+    insertIdempotencyRecord(db, {
+      operation_id: operationId,
+      command: "cleanup",
+      input_hash: inputHash,
+      result_json: resultJson,
+      created_at: ts,
+    });
+
+    return result;
+  }
+
+  // Deletion failed — set CLEANUP_FAILED, not CLEANED
+  try {
+    updateWorkspaceStatus(
+      db,
+      workspaceId,
+      row.status === "CLEANUP_FAILED" ? "CLEANUP_FAILED" : "CLEANUP_FAILED",
+      now(),
+    );
+  } catch {
+    // If transition fails (state doesn't allow CLEANUP_FAILED), force the status
+    try {
+      updateWorkspaceStatus(db, workspaceId, "CLEANUP_FAILED", now());
+    } catch {
+      // Best effort
+    }
+  }
+
+  message = `Cleanup failed: ${blockers.join("; ")}`;
+
+  const result: CleanupWorkspaceStrictResult = {
+    operationId,
+    workspaceId,
+    path: workspacePath,
+    removed: false,
+    status: "CLEANUP_FAILED",
+    message,
+    blockers,
+  };
+
+  const resultJson = JSON.stringify(result);
+  updateOperationJournalStatus(db, operationId, workspaceId, "failed", resultJson, now());
+
+  return result;
 }

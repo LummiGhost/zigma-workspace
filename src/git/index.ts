@@ -365,4 +365,249 @@ export function safeGitOutput(args: string[], cwd: string): string {
   }
 }
 
+/**
+ * Stage ALL changes including untracked files, renames, and deletes.
+ * Uses `git add --all` which captures tracked, untracked, rename, delete,
+ * and binary changes. Does NOT silently swallow errors.
+ */
+export function stageAll(workspacePath: string): void {
+  runGit(["add", "--all"], workspacePath);
+}
+
+/**
+ * Create a commit with the given message. Returns the new commit SHA.
+ * Throws GitError on failure — never returns undefined silently.
+ */
+export function createCommit(
+  workspacePath: string,
+  message: string
+): string {
+  runGit(
+    [
+      "-c",
+      "user.email=zigma-workspace@local",
+      "-c",
+      "user.name=zigma-workspace",
+      "commit",
+      "-m",
+      message,
+    ],
+    workspacePath
+  );
+  return getHeadCommit(workspacePath)!;
+}
+
+/**
+ * Get the list of files changed in a commit range.
+ */
+export function getCommitFiles(
+  workspacePath: string,
+  fromCommit: string,
+  toCommit: string
+): string[] {
+  try {
+    const output = runGit(
+      ["diff", "--name-only", fromCommit, toCommit],
+      workspacePath
+    );
+    if (!output) return [];
+    return output
+      .split("\n")
+      .map((f) => f.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check if the working tree has any uncommitted changes (tracked or untracked).
+ * Returns true if dirty.
+ */
+export function isWorkingTreeDirty(workspacePath: string): boolean {
+  try {
+    const status = runGit(["status", "--porcelain"], workspacePath);
+    return status.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the full status text including untracked files (--porcelain).
+ */
+export function getFullStatus(workspacePath: string): string {
+  return runGit(["status", "--porcelain"], workspacePath);
+}
+
+/**
+ * Merge a commit into the current branch. Returns the merge commit SHA.
+ * Uses --no-ff to always create a merge commit for audit trail.
+ * Throws GitError on conflict.
+ */
+export function mergeCommit(
+  workspacePath: string,
+  sourceCommit: string,
+  message: string
+): string {
+  runGit(
+    [
+      "-c",
+      "user.email=zigma-workspace@local",
+      "-c",
+      "user.name=zigma-workspace",
+      "merge",
+      "--no-ff",
+      "-m",
+      message,
+      sourceCommit,
+    ],
+    workspacePath
+  );
+  return getHeadCommit(workspacePath)!;
+}
+
+/**
+ * Attempt a merge and return conflict files if it fails.
+ * On conflict, aborts the merge to restore clean state.
+ * Returns { success: true, commit } or { success: false, conflictFiles }.
+ */
+export function mergeOrConflict(
+  workspacePath: string,
+  sourceCommit: string,
+  message: string
+): { success: true; commit: string } | { success: false; conflictFiles: string[] } {
+  try {
+    runGit(
+      [
+        "-c",
+        "user.email=zigma-workspace@local",
+        "-c",
+        "user.name=zigma-workspace",
+        "merge",
+        "--no-ff",
+        "-m",
+        message,
+        sourceCommit,
+      ],
+      workspacePath
+    );
+    const commit = getHeadCommit(workspacePath)!;
+    return { success: true, commit };
+  } catch (err) {
+    // Abort merge to restore clean state
+    try {
+      runGit(["merge", "--abort"], workspacePath);
+    } catch {
+      // If abort fails, try reset
+      try {
+        runGit(["reset", "--hard", "HEAD"], workspacePath);
+      } catch {
+        // Best effort
+      }
+    }
+
+    // Collect conflict file list
+    let conflictFiles: string[] = [];
+    try {
+      const output = runGit(["diff", "--name-only", "--diff-filter=U"], workspacePath);
+      conflictFiles = output
+        .split("\n")
+        .map((f) => f.trim())
+        .filter(Boolean);
+    } catch {
+      // Can't get conflict files
+    }
+
+    if (err instanceof GitError) {
+      // Pass through with conflict context
+      throw new GitError(
+        `Merge conflict: ${err.message}`,
+        err.command,
+        err.stderr
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Push a branch to the specified remote and ref.
+ * Throws GitError on failure.
+ */
+export function pushBranch(
+  mirrorPath: string,
+  branch: string,
+  remoteRef: string
+): void {
+  runGit(["push", "origin", `${branch}:${remoteRef}`], mirrorPath);
+}
+
+/**
+ * Fetch a specific ref from origin in a mirror.
+ */
+export function fetchRef(mirrorPath: string, ref: string): void {
+  runGit(["fetch", "origin", ref], mirrorPath);
+}
+
+/**
+ * Check if a branch exists in the mirror.
+ */
+export function branchExists(mirrorPath: string, branch: string): boolean {
+  try {
+    runGit(["rev-parse", "--verify", `refs/heads/${branch}`], mirrorPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Reset a worktree to a specific commit, discarding all local changes.
+ */
+export function resetHard(workspacePath: string, commit: string): void {
+  runGit(["reset", "--hard", commit], workspacePath);
+}
+
+/**
+ * Get the commit log in a range as structured data.
+ */
+export function getCommitLog(
+  workspacePath: string,
+  fromCommit: string,
+  toCommit: string
+): Array<{ hash: string; message: string }> {
+  try {
+    const output = runGit(
+      ["log", "--format=%H%n%s", `${fromCommit}..${toCommit}`],
+      workspacePath
+    );
+    if (!output) return [];
+    const lines = output.split("\n").filter(Boolean);
+    const commits: Array<{ hash: string; message: string }> = [];
+    for (let i = 0; i < lines.length; i += 2) {
+      commits.push({ hash: lines[i].trim(), message: lines[i + 1]?.trim() ?? "" });
+    }
+    return commits;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check if a commit is an ancestor of another (i.e., already merged).
+ */
+export function isAncestor(
+  workspacePath: string,
+  maybeAncestor: string,
+  commit: string
+): boolean {
+  try {
+    runGit(["merge-base", "--is-ancestor", maybeAncestor, commit], workspacePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export { runGit };

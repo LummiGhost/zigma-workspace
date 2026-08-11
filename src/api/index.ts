@@ -48,7 +48,18 @@ export { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock
 export { collectDiff } from "../core/diff.js";
 export { createSnapshot, listSnapshots } from "../core/snapshot.js";
 export { createArtifact, getArtifactsForSnapshot } from "../core/artifact.js";
-export { cleanupWorkspace, detectOrphanWorktrees } from "../core/cleanup.js";
+export { cleanupWorkspace, cleanupWorkspaceStrict, detectOrphanWorktrees } from "../core/cleanup.js";
+export { commitWorkspace } from "../core/commit.js";
+export { integrateWorkspace, abortIntegration } from "../core/integrate.js";
+export { publishWorkspace } from "../core/publish.js";
+export { reconcileWorkspace } from "../core/reconcile.js";
+export {
+  acquireIntegrationLock,
+  releaseIntegrationLock,
+  takeoverIntegrationLock,
+  heartbeatIntegrationLock,
+  getIntegrationLockState,
+} from "../core/integration-lock.js";
 export { emitWorkspaceEvent } from "../core/events.js";
 export { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
 export { openDb, closeDb } from "../db/index.js";
@@ -122,3 +133,29 @@ export type {
   CreateChildWorkspaceInput,
   CreateChildWorkspaceOutput,
 } from "../core/adapters/workspace.js";
+
+// ── v0.3: Integration, recovery, and strict cleanup ─────────────────────────
+
+export type {
+  CommitWorkspaceInput,
+  CommitWorkspaceResult,
+  IntegrateWorkspaceInput,
+  IntegrateWorkspaceResult,
+  IntegrateConflictResult,
+  PublishWorkspaceInput,
+  PublishWorkspaceResult,
+  PublishStrategy,
+  AbortIntegrationInput,
+  AbortIntegrationResult,
+  ReconcileWorkspaceInput,
+  ReconcileWorkspaceResult,
+  ReconciledOperation,
+  ReconciledStatus,
+  CleanupWorkspaceStrictInput,
+  CleanupWorkspaceStrictResult,
+  IntegrationLock,
+  IntegrationLockRow,
+  OperationJournalRow,
+  OperationCommand,
+  OperationStatus,
+} from "../types/index.js";

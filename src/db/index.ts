@@ -76,6 +76,27 @@ CREATE TABLE IF NOT EXISTS workspace_idempotency (
   result_json TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS integration_locks (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL UNIQUE,
+  owner TEXT NOT NULL,
+  expires_at TEXT,
+  acquired_at TEXT NOT NULL,
+  last_heartbeat TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operation_journal (
+  operation_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  command TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'started',
+  input_hash TEXT NOT NULL,
+  result_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (operation_id, workspace_id)
+);
 `;
 
 const _dbMap = new Map<string, Database.Database>();
