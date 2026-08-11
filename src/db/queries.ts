@@ -6,6 +6,8 @@ import type {
   WorkspaceSnapshotRow,
   WorkspaceEventRow,
   ArtifactRow,
+  IntegrationLockRow,
+  OperationJournalRow,
 } from "../types/index.js";
 
 // ── Workspaces ──────────────────────────────────────────────────────────────
@@ -312,4 +314,137 @@ export function listArtifactsForSnapshot(
   return db
     .prepare("SELECT * FROM artifacts WHERE snapshot_id = ? ORDER BY created_at DESC")
     .all(snapshotId) as ArtifactRow[];
+}
+
+// ── Integration Locks ────────────────────────────────────────────────────────
+
+export function getIntegrationLock(
+  db: Database.Database,
+  workspaceId: string
+): IntegrationLockRow | undefined {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      "SELECT * FROM integration_locks WHERE workspace_id = ? AND (expires_at IS NULL OR expires_at > ?)"
+    )
+    .get(workspaceId, now) as IntegrationLockRow | undefined;
+}
+
+export function getIntegrationLockExpired(
+  db: Database.Database,
+  workspaceId: string
+): IntegrationLockRow | undefined {
+  return db
+    .prepare("SELECT * FROM integration_locks WHERE workspace_id = ?")
+    .get(workspaceId) as IntegrationLockRow | undefined;
+}
+
+export function insertIntegrationLock(
+  db: Database.Database,
+  row: IntegrationLockRow
+): void {
+  db.prepare(`
+    INSERT INTO integration_locks
+      (id, workspace_id, owner, expires_at, acquired_at, last_heartbeat)
+    VALUES
+      (@id, @workspace_id, @owner, @expires_at, @acquired_at, @last_heartbeat)
+  `).run(row);
+}
+
+export function deleteIntegrationLock(
+  db: Database.Database,
+  workspaceId: string,
+  owner: string
+): boolean {
+  const result = db.prepare(
+    "DELETE FROM integration_locks WHERE workspace_id = ? AND owner = ?"
+  ).run(workspaceId, owner);
+  return result.changes > 0;
+}
+
+export function deleteExpiredIntegrationLock(
+  db: Database.Database,
+  workspaceId: string,
+  expiredAt: string
+): void {
+  db.prepare(
+    "DELETE FROM integration_locks WHERE workspace_id = ? AND expires_at IS NOT NULL AND expires_at <= ?"
+  ).run(workspaceId, expiredAt);
+}
+
+export function updateIntegrationLockHeartbeat(
+  db: Database.Database,
+  workspaceId: string,
+  owner: string,
+  lastHeartbeat: string
+): boolean {
+  const result = db.prepare(
+    `UPDATE integration_locks
+     SET last_heartbeat = ?
+     WHERE workspace_id = ? AND owner = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, workspaceId, owner, lastHeartbeat);
+  return result.changes > 0;
+}
+
+// ── Operation Journal ────────────────────────────────────────────────────────
+
+export function insertOperationJournal(
+  db: Database.Database,
+  row: OperationJournalRow
+): void {
+  db.prepare(`
+    INSERT INTO operation_journal
+      (operation_id, workspace_id, command, status, input_hash, result_json, created_at, updated_at)
+    VALUES
+      (@operation_id, @workspace_id, @command, @status, @input_hash, @result_json, @created_at, @updated_at)
+  `).run(row);
+}
+
+export function getOperationJournal(
+  db: Database.Database,
+  operationId: string,
+  workspaceId: string
+): OperationJournalRow | undefined {
+  return db
+    .prepare(
+      "SELECT * FROM operation_journal WHERE operation_id = ? AND workspace_id = ?"
+    )
+    .get(operationId, workspaceId) as OperationJournalRow | undefined;
+}
+
+export function updateOperationJournalStatus(
+  db: Database.Database,
+  operationId: string,
+  workspaceId: string,
+  status: string,
+  resultJson: string | null,
+  updatedAt: string
+): void {
+  db.prepare(
+    `UPDATE operation_journal
+     SET status = ?, result_json = ?, updated_at = ?
+     WHERE operation_id = ? AND workspace_id = ?`
+  ).run(status, resultJson, updatedAt, operationId, workspaceId);
+}
+
+export function listOperationJournalForWorkspace(
+  db: Database.Database,
+  workspaceId: string
+): OperationJournalRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM operation_journal WHERE workspace_id = ? ORDER BY created_at ASC"
+    )
+    .all(workspaceId) as OperationJournalRow[];
+}
+
+export function updateWorkspaceHead(
+  db: Database.Database,
+  workspaceId: string,
+  headCommit: string,
+  updatedAt: string
+): void {
+  db.prepare(
+    "UPDATE workspaces SET base_commit = ?, updated_at = ? WHERE id = ?"
+  ).run(headCommit, updatedAt, workspaceId);
 }
