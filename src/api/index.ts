@@ -50,8 +50,8 @@ export { createSnapshot, listSnapshots } from "../core/snapshot.js";
 export { createArtifact, getArtifactsForSnapshot } from "../core/artifact.js";
 export { cleanupWorkspace, detectOrphanWorktrees } from "../core/cleanup.js";
 export { emitWorkspaceEvent } from "../core/events.js";
-export { getConfig, ensureStateDirs } from "../config/index.js";
-export { openDb } from "../db/index.js";
+export { getConfig, ensureStateDirs, loadConfigFile } from "../config/index.js";
+export { openDb, closeDb } from "../db/index.js";
 
 // ── v0.2: YAML workspace definition types ──────────────────────────────────
 

@@ -19,7 +19,9 @@ import {
   detectOrphanWorktrees,
   getConfig,
   ensureStateDirs,
+  loadConfigFile,
   openDb,
+  closeDb,
 } from "./index.js";
 
 describe("API exports", () => {
@@ -108,5 +110,15 @@ describe("API exports", () => {
   it("should export openDb function", () => {
     expect(openDb).toBeDefined();
     expect(typeof openDb).toBe("function");
+  });
+
+  it("should export closeDb function", () => {
+    expect(closeDb).toBeDefined();
+    expect(typeof closeDb).toBe("function");
+  });
+
+  it("should export loadConfigFile function", () => {
+    expect(loadConfigFile).toBeDefined();
+    expect(typeof loadConfigFile).toBe("function");
   });
 });

@@ -169,8 +169,6 @@ export interface WorkspaceRow {
   status: string;
   created_at: string;
   updated_at: string;
-  workspace_type?: string | null;
-  definition_path?: string | null;
 }
 
 export interface RepositoryCacheRow {
