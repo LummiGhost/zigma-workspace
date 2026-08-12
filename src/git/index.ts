@@ -64,7 +64,7 @@ export function cloneMirror(repoUrl: string, mirrorPath: string): void {
  * Fetch all refs in an existing mirror.
  */
 export function fetchMirror(mirrorPath: string): void {
-  runGit(["fetch", "--all", "--prune"], mirrorPath);
+  runGit(["fetch", "--all"], mirrorPath);
 }
 
 /**
@@ -189,7 +189,7 @@ export function getStatus(workspacePath: string): string {
 export function getChangedFiles(workspacePath: string, baseCommit: string): string[] {
   try {
     const output = runGit(
-      ["diff", "--name-only", baseCommit, "HEAD"],
+      ["-c", "core.quotepath=false", "diff", "--name-only", baseCommit, "HEAD"],
       workspacePath
     );
     if (!output) return [];
@@ -200,7 +200,7 @@ export function getChangedFiles(workspacePath: string, baseCommit: string): stri
   } catch {
     // No commits yet or no diff
     try {
-      const output = runGit(["diff", "--name-only", baseCommit], workspacePath);
+      const output = runGit(["-c", "core.quotepath=false", "diff", "--name-only", baseCommit], workspacePath);
       if (!output) return [];
       return output
         .split("\n")
@@ -218,7 +218,7 @@ export function getChangedFiles(workspacePath: string, baseCommit: string): stri
 export function getUntrackedFiles(workspacePath: string): string[] {
   try {
     const output = runGit(
-      ["ls-files", "--others", "--exclude-standard"],
+      ["-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"],
       workspacePath
     );
     if (!output) return [];
@@ -407,7 +407,7 @@ export function getCommitFiles(
 ): string[] {
   try {
     const output = runGit(
-      ["diff", "--name-only", fromCommit, toCommit],
+      ["-c", "core.quotepath=false", "diff", "--name-only", fromCommit, toCommit],
       workspacePath
     );
     if (!output) return [];
@@ -510,7 +510,7 @@ export function mergeOrConflict(
     // Collect conflict file list
     let conflictFiles: string[] = [];
     try {
-      const output = runGit(["diff", "--name-only", "--diff-filter=U"], workspacePath);
+      const output = runGit(["-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=U"], workspacePath);
       conflictFiles = output
         .split("\n")
         .map((f) => f.trim())
@@ -540,7 +540,10 @@ export function pushBranch(
   branch: string,
   remoteRef: string
 ): void {
-  runGit(["push", "origin", `${branch}:${remoteRef}`], mirrorPath);
+  runGit(
+    ["-c", "remote.origin.mirror=false", "push", "origin", `${branch}:${remoteRef}`],
+    mirrorPath,
+  );
 }
 
 /**
