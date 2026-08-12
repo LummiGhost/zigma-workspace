@@ -141,3 +141,7 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# Zigma Flow runtime state (do not commit)
+.zigma-flow/runs/
+.zigma-flow/config.json
