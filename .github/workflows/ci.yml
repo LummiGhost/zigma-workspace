@@ -36,10 +36,6 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      - name: Upgrade npm (Windows)
-        if: runner.os == 'Windows'
-        run: npm install -g npm@latest
-
       - name: Install dependencies
         run: npm ci
 
