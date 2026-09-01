@@ -55,12 +55,13 @@ $env:ZIGMA_WORKSPACE_STATE_DIR = "D:\temp\zigma-state"
 
 - [CLI 命令参考](docs/cli.md)
 - [TypeScript API 参考](docs/api.md)
+- [平台集成契约](docs/platform-integration-contract.md)
 - [产品需求文档](docs/prd.md)
 
 ## 当前实现范围
 
 - `read-only` 模式目前只写入本地 Git 配置标记，不会阻止文件写入。
-- 锁是每个 workspace 至多一条的协作记录；不会按读锁/写锁实现共享锁，也不会自动清理过期锁。
+- 协作锁支持多读单写，并在新锁获取时清理过期记录；integration lock 另提供 owner、lease、heartbeat 和过期接管语义。
 - diff 和 snapshot 生成的 patch 不包含未跟踪文件。
 - 配置文件会被创建和读取，但其中的 `defaultMode`、保留期和磁盘上限目前尚未参与运行时决策。
 

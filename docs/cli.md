@@ -253,7 +253,7 @@ zigma-workspace cleanup --workspace <id> [--operation-id <id>] [--json]
 
 优先执行 `git worktree remove --force` 并 prune；失败时会尝试直接递归删除 workspace 目录。重复清理返回成功且 `removed: false`。
 
-重要：当前实现无论文件系统删除最终是否成功，都会把数据库状态更新为 `cleaned`。自动化调用方必须检查返回的 `removed` 和 `message`，不能只检查进程退出码。
+重要：只有文件系统删除成功时，当前实现才把数据库状态更新为 `cleaned`。自动化调用方仍必须检查返回的 `removed` 和 `message`，不能只检查进程退出码；跨进程恢复和严格清理语义见[平台集成契约](platform-integration-contract.md)。
 
 ## 状态与持久化
 
