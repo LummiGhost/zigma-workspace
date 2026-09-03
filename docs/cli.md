@@ -42,7 +42,7 @@ zigma-workspace create ...
 }
 ```
 
-**错误响应（stderr，进程退出码 1）：**
+**错误响应（stdout，进程退出码 1）：**
 
 ```json
 {
@@ -55,6 +55,11 @@ zigma-workspace create ...
   }
 }
 ```
+
+在 `--json` 模式中，stdout 始终只包含一个完整的 machine envelope：成功为
+`ok: true`，可预期的命令失败为 `ok: false`。stderr 保留给 envelope 之外的
+进程/宿主诊断，不能混入人类可读日志；自动化调用方应先解析 stdout 的 envelope，
+再按 `ok`、`error.code` 和退出码作出决定，而不是从 stderr 文本推断错误。
 
 ### 稳定错误码
 
@@ -241,7 +246,12 @@ zigma-workspace snapshot --workspace <id> [--operation-id <id>] [--json]
 - 没有 patch 时，快照类型为 `metadata-only`，`artifact.media_type` 为 `application/json`。
 - 有 patch 时，类型为 `diff`，`artifact.media_type` 为 `text/x-diff`，`artifact.digest` 为 SHA-256。
 
-JSON `data` 包含：`snapshot_id`、`workspace_id`、`kind`、`path`、`checksum`、`artifact`（格式同 diff）、`created_at`。
+JSON `data` 包含：`snapshot_id`、`workspace_id`、`kind`、`artifacts`、`created_at`。
+`artifacts` 是数组；每一项都包含 `id`、`kind`、`uri`、`media_type`、`digest`。
+每个 `digest` 均为该 artifact 文件 UTF-8 内容的 `sha256:<64 个小写十六进制字符>`；
+metadata artifact 的 `media_type` 为 `application/json`，patch artifact 的
+`media_type` 为 `text/x-diff`。snapshot 即使没有 patch 也会包含一个 metadata
+artifact；有 tracked diff 时额外包含一个 patch artifact。
 
 ## `cleanup`
 
