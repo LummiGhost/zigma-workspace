@@ -36,6 +36,12 @@ CLI 的每个 `--json` 响应都必须包含：
 }
 ```
 
+machine envelope 的唯一协议通道是 **stdout**：无论成功还是已分类的命令失败，
+stdout 都恰好输出一个 JSON document，且不包含日志、进度或人类诊断。stderr
+只可用于 envelope 之外的进程/宿主诊断，Core 不得依赖它来解析 provider 结果。
+调用方必须先解析 stdout，再校验 `contract_version`，未知主版本必须拒绝，不能
+根据包版本或 stderr 文本猜测兼容性。
+
 失败响应保持同一 envelope：
 
 ```json
@@ -111,6 +117,32 @@ diff/snapshot 的可移植引用为：
   "digest": "sha256-..."
 }
 ```
+
+V1 artifact descriptor 的精确 schema 为：
+
+```ts
+interface ArtifactDescriptorV1 {
+  id: string; // snapshot artifacts only; diff.patch_artifact omits this field
+  kind: "metadata" | "patch" | "log" | "report" | "generated-file"; // snapshot artifacts only
+  uri: string; // absolute file: URI produced by pathToFileURL
+  media_type: "application/json" | "text/x-diff";
+  digest: `sha256:${string}`; // 64 lowercase hexadecimal characters
+}
+
+interface DiffDataV1 {
+  patch_artifact: Omit<ArtifactDescriptorV1, "id" | "kind"> | null;
+}
+
+interface SnapshotDataV1 {
+  artifacts: ArtifactDescriptorV1[];
+}
+```
+
+`diff.patch_artifact` is `null` when no tracked patch was produced; otherwise
+it has `media_type: "text/x-diff"`. `snapshot.artifacts` always has one
+metadata descriptor and adds one patch descriptor only when tracked changes
+exist. `digest` hashes the exact UTF-8 bytes written to the referenced file;
+consumers must verify it before use.
 
 `file:` URI 只在同一宿主有效。跨宿主系统必须上传到持久化 artifact store，
 替换为该 store 的 URI，并保留 `media_type` 和 digest。消费者在使用前验证

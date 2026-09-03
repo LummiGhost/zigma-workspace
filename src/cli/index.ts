@@ -52,7 +52,12 @@ function outputError(
       ok: false,
       error: { code, message, ...(details !== undefined ? { details } : {}) },
     };
-    console.error(JSON.stringify(out, null, 2));
+    // The JSON protocol has one authoritative channel: stdout.  A caller must
+    // be able to parse both success and expected provider failures without
+    // guessing which stream contains the envelope.  Keep stderr for transport
+    // diagnostics that are outside the protocol (for example, a host's own
+    // process-launch failure); never write human diagnostics here in JSON mode.
+    console.log(JSON.stringify(out, null, 2));
   } else {
     console.error(`Error: ${message}`);
     if (details !== undefined) {
