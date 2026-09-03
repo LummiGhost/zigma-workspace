@@ -61,6 +61,36 @@ zigma-workspace create ...
 进程/宿主诊断，不能混入人类可读日志；自动化调用方应先解析 stdout 的 envelope，
 再按 `ok`、`error.code` 和退出码作出决定，而不是从 stderr 文本推断错误。
 
+### `contract-info`
+
+在真正创建状态目录、SQLite 数据库、镜像、worktree 或其他工作区文件之前，
+调用方可使用只读握手命令探测 provider：
+
+```powershell
+zigma-workspace contract-info --json
+```
+
+该命令不会读取或创建 state directory，也不会执行 Git。成功响应的 `data` 为：
+
+```json
+{
+  "provider": "zigma-workspace",
+  "package_version": "0.1.5",
+  "contract_version": 1,
+  "capabilities": [
+    "workspace-create-v1",
+    "workspace-bind-run-v1",
+    "workspace-diff-artifact-v1",
+    "workspace-snapshot-artifacts-v1",
+    "workspace-cleanup-v1"
+  ]
+}
+```
+
+`capabilities` 是稳定的 provider 能力标识；Core 必须先校验 envelope 的
+`contract_version` 和所需能力，再调用会产生副作用的命令。未知主契约版本或
+缺少所需能力时必须 fail closed。
+
 ### 稳定错误码
 
 | 代码 | 含义 |

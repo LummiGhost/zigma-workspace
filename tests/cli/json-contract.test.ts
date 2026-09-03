@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 const cliPath = path.resolve("src/cli/index.ts");
+const packageVersion = (JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf-8")) as { version: string }).version;
 const tempDirs: string[] = [];
 
 interface JsonEnvelope {
@@ -64,6 +65,37 @@ afterEach(() => {
 });
 
 describe("Workspace CLI JSON V1 black-box contract", () => {
+  it("reports the provider contract without creating state or workspace files", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-contract-info-"));
+    tempDirs.push(root);
+    const stateDir = path.join(root, "state-that-must-not-be-created");
+    const result = invokeCli([
+      "--state-dir",
+      stateDir,
+      "contract-info",
+      "--json",
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const envelope = parseSingleEnvelope(result.stdout);
+    assertV1Envelope(envelope, true);
+    expect(envelope.data).toMatchObject({
+      provider: "zigma-workspace",
+      package_version: packageVersion,
+      contract_version: 1,
+      capabilities: [
+        "workspace-create-v1",
+        "workspace-bind-run-v1",
+        "workspace-diff-artifact-v1",
+        "workspace-snapshot-artifacts-v1",
+        "workspace-cleanup-v1",
+      ],
+    });
+    expect(fs.existsSync(stateDir)).toBe(false);
+    expect(fs.readdirSync(root)).toEqual([]);
+  });
+
   it("emits one stdout success envelope and verifiable diff/snapshot artifact descriptors", () => {
     const { repo, stateDir } = makeRepo();
     const create = invokeCli([
