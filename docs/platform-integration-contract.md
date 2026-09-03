@@ -70,6 +70,7 @@ stdout 都恰好输出一个 JSON document，且不包含日志、进度或人�
 
 | 能力 | CLI v1 | TypeScript API | 当前保证 |
 | --- | --- | --- | --- |
+| contract-info | 稳定 | - | 只读握手；不创建 state directory、数据库、镜像或 worktree |
 | create | 稳定 | 稳定 | 创建独立 worktree 和 registry 记录 |
 | bind-run | 稳定 | 稳定 | 绑定 task/flow run，重复绑定需满足状态约束 |
 | status/list | 稳定 | 稳定 | 返回 registry 状态、路径、Git 基线和协作锁 |
@@ -84,6 +85,38 @@ stdout 都恰好输出一个 JSON document，且不包含日志、进度或人�
 “可用”表示当前实现和 provider tests 已存在，但在 M3 完成前不能被远程
 编排器当作稳定 CLI 协议。M3 的目标不是重新定义这些语义，而是把必要能力
 暴露为版本化 CLI/API，补齐跨进程契约测试和取消恢复闭环。
+
+### 3.1 Provider handshake
+
+调用方在执行任何会产生副作用的命令前，应运行：
+
+```text
+zigma-workspace contract-info --json
+```
+
+该命令只返回一个 stdout V1 envelope，且不得调用 `setup()`、读取配置、打开
+SQLite、创建 state directory、执行 Git 或创建工作区。`data` 字段使用 CLI 的
+snake_case 命名：
+
+```json
+{
+  "provider": "zigma-workspace",
+  "package_version": "0.1.5",
+  "contract_version": 1,
+  "capabilities": [
+    "workspace-create-v1",
+    "workspace-bind-run-v1",
+    "workspace-diff-artifact-v1",
+    "workspace-snapshot-artifacts-v1",
+    "workspace-cleanup-v1"
+  ]
+}
+```
+
+`package_version` 用于兼容矩阵和诊断，不能替代 `contract_version`。Core 应将
+能力名视为稳定标识：未知主契约版本或缺少所需 capability 时，必须在 create、
+bind-run、diff、snapshot、cleanup 之前 fail closed。新增 V1 可选能力不应使旧
+调用方失败。
 
 ## 4. 标识、路径和产物
 

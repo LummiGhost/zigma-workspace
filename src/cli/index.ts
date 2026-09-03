@@ -30,6 +30,18 @@ import type Database from "better-sqlite3";
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json") as { version: string };
 
+/**
+ * Capabilities exposed by the read-only provider handshake.  Keep these names
+ * stable: Core uses them to fail closed before issuing a mutating command.
+ */
+const WORKSPACE_CAPABILITIES = [
+  "workspace-create-v1",
+  "workspace-bind-run-v1",
+  "workspace-diff-artifact-v1",
+  "workspace-snapshot-artifacts-v1",
+  "workspace-cleanup-v1",
+] as const;
+
 // ── Output helpers ──────────────────────────────────────────────────────────
 
 function outputOk(data: unknown, useJson: boolean): void {
@@ -200,6 +212,28 @@ program
     "--state-dir <path>",
     "Override state directory with an absolute path (or set ZIGMA_WORKSPACE_STATE_DIR)"
   );
+
+// ── contract-info ─────────────────────────────────────────────────────────
+
+program
+  .command("contract-info")
+  .description("Report the provider contract and capabilities without side effects")
+  .option("--json", "Output JSON")
+  .action((opts: { json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    // Deliberately do not call setup(): this command must remain safe for a
+    // caller to run during admission/handshake before a state directory,
+    // database, mirror, or workspace exists.
+    outputOk(
+      {
+        provider: "zigma-workspace",
+        package_version: version,
+        contract_version: CONTRACT_VERSION,
+        capabilities: [...WORKSPACE_CAPABILITIES],
+      },
+      useJson
+    );
+  });
 
 // ── create ─────────────────────────────────────────────────────────────────
 
