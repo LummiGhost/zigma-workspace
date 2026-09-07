@@ -474,7 +474,7 @@ interface CleanupWorkspaceStrictResult {
 }
 ```
 
-严格清理：只有 worktree registration 和目录确认移除后才进入 CLEANED。删除失败返回 CLEANUP_FAILED 和 blocker 列表。重复清理幂等。能诊断 Windows 文件占用。
+严格清理：只有 worktree registration 和目录确认移除后才进入 CLEANED。删除或 registration 验证失败返回 CLEANUP_FAILED 和 blocker 列表；相同 operation id 稳定重放原结果。能诊断 Windows 文件占用。
 
 ## Integration Lock API
 
@@ -493,7 +493,7 @@ interface IntegrationLock {
 }
 ```
 
-原子 compare-and-acquire。同一 owner 重入时延长 lease。锁已过期时自动接管。其他 owner 持有 active lock 时抛出 `WORKSPACE_LOCK_CONFLICT`。
+原子 compare-and-acquire。同一 owner 重入时用本次传入的 `expiresAt` 更新 lease。锁已过期时自动接管。其他 owner 持有 active lock 时抛出 `WORKSPACE_LOCK_CONFLICT`。
 
 ### `releaseIntegrationLock(db, workspaceId, owner): void`
 
@@ -501,7 +501,7 @@ interface IntegrationLock {
 
 ### `takeoverIntegrationLock(db, workspaceId, newOwner, expiresAt?): IntegrationLock`
 
-接管过期锁。锁仍 active 时抛出 `WORKSPACE_LOCK_CONFLICT`。
+接管过期锁。锁仍 active 时抛出 `WORKSPACE_LOCK_CONFLICT`；不存在过期锁证据时抛出 `WORKSPACE_LOCK_EXPIRED`，不会创建新锁。
 
 ### `heartbeatIntegrationLock(db, workspaceId, owner): IntegrationLock`
 
@@ -520,7 +520,7 @@ interface IntegrationLock {
 | `WORKSPACE_STATE_CONFLICT` | expectedState 与实际状态不匹配 |
 | `WORKSPACE_HEAD_CONFLICT` | expectedHead 与实际 HEAD 不匹配 |
 | `WORKSPACE_INTEGRATION_CONFLICT` | 集成合并冲突 |
-| `WORKSPACE_CLEANUP_FAILED` | 严格清理失败（目录未删除） |
+| `WORKSPACE_CLEANUP_FAILED` | 严格清理失败（目录或 Git registration 未确认删除） |
 | `WORKSPACE_OPERATION_INCOMPLETE` | 操作未完成（如无 HEAD commit） |
 | `WORKSPACE_LOCK_OWNER_MISMATCH` | Lock owner 与调用者不匹配 |
 | `WORKSPACE_LOCK_EXPIRED` | Lock 已过期 |

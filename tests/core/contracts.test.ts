@@ -855,6 +855,34 @@ describe("cleanupWorkspaceStrict contract", () => {
       fs.closeSync(fd);
     }
   });
+
+  it("does not mark CLEANED when Git registration removal cannot be verified and replays the failure", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "cleanup-registration-unverified");
+    const invalidMirror = path.join(ctx.root, "not-a-git-directory");
+    fs.writeFileSync(invalidMirror, "fixture\n", "utf-8");
+    ctx.db.prepare("UPDATE repository_caches SET mirror_path = ? WHERE repository_url = ?")
+      .run(invalidMirror, ws.repositoryUrl);
+    const operationId = uniqueId();
+
+    const first = cleanupWorkspaceStrict(ctx.db, ctx.config, {
+      operationId,
+      workspaceId: ws.id,
+    });
+
+    expect(first.status).toBe("CLEANUP_FAILED");
+    expect(first.removed).toBe(false);
+    expect(first.blockers).toEqual(
+      expect.arrayContaining([expect.stringContaining("registration verification failed")]),
+    );
+    expect(getWorkspace(ctx.db, ws.id).status).toBe("CLEANUP_FAILED");
+
+    const replayed = cleanupWorkspaceStrict(ctx.db, ctx.config, {
+      operationId,
+      workspaceId: ws.id,
+    });
+    expect(replayed).toEqual(first);
+  });
 });
 
 // ── 6. Reconcile Across States ──────────────────────────────────────────────
@@ -1021,6 +1049,20 @@ describe("expired integration lock takeover", () => {
     expect(lock2.id).toBe(lock1.id);
   });
 
+  it("acquireIntegrationLock replaces the lease expiry for the same owner", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "ilock-reentrant-expiry");
+    const firstExpiry = new Date(Date.now() + 60_000).toISOString();
+    const secondExpiry = new Date(Date.now() + 120_000).toISOString();
+
+    const lock1 = acquireIntegrationLock(ctx.db, ws.id, "owner-1", firstExpiry);
+    const lock2 = acquireIntegrationLock(ctx.db, ws.id, "owner-1", secondExpiry);
+
+    expect(lock2.id).toBe(lock1.id);
+    expect(lock2.expiresAt).toBe(secondExpiry);
+    expect(getIntegrationLockState(ctx.db, ws.id)?.expiresAt).toBe(secondExpiry);
+  });
+
   it("acquireIntegrationLock throws for active lock held by different owner", () => {
     const ctx = setupRepo();
     const ws = makeWorkspace(ctx, "ilock-conflict");
@@ -1064,6 +1106,16 @@ describe("expired integration lock takeover", () => {
     ).toThrow(
       expect.objectContaining({ code: "WORKSPACE_LOCK_CONFLICT" }),
     );
+  });
+
+  it("takeoverIntegrationLock rejects when no expired lock exists", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "ilock-takeover-missing");
+
+    expect(() => takeoverIntegrationLock(ctx.db, ws.id, "owner-2")).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_LOCK_EXPIRED" }),
+    );
+    expect(getIntegrationLockState(ctx.db, ws.id)).toBeNull();
   });
 
   it("releaseIntegrationLock releases and is idempotent", () => {

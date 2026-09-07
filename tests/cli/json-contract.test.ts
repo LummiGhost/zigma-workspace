@@ -293,4 +293,38 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     });
     expect(pending.stdout).not.toContain("__pending");
   });
+
+  it("emits strict cleanup failure as a replayable non-success envelope", () => {
+    const { root, repo, stateDir } = makeRepo();
+    const created = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "create", "--repo", repo, "--base", "main", "--branch", "cleanup-failure", "--json",
+    ]).stdout);
+    const workspaceId = String(created.data?.workspace_id);
+    const invalidMirror = path.join(root, "not-a-git-directory");
+    fs.writeFileSync(invalidMirror, "fixture\n", "utf-8");
+    const db = new Database(path.join(stateDir, "registry.db"));
+    db.prepare("UPDATE repository_caches SET mirror_path = ? WHERE repository_url = ?")
+      .run(invalidMirror, repo);
+    db.close();
+    const operationId = crypto.randomUUID();
+    const args = [
+      "--state-dir", stateDir, "cleanup", "--workspace", workspaceId,
+      "--strict", "--operation-id", operationId, "--json",
+    ];
+
+    const first = invokeCli(args);
+    expect(first.status).toBe(1);
+    expect(first.stderr).toBe("");
+    const firstEnvelope = parseSingleEnvelope(first.stdout);
+    assertV1Envelope(firstEnvelope, false);
+    expect(firstEnvelope.error).toMatchObject({
+      code: "WORKSPACE_CLEANUP_FAILED",
+      details: { workspace_id: workspaceId, removed: false, status: "CLEANUP_FAILED" },
+    });
+
+    const replayed = invokeCli(args);
+    expect(replayed.status).toBe(1);
+    expect(parseSingleEnvelope(replayed.stdout)).toEqual(firstEnvelope);
+  }, 30_000);
 });

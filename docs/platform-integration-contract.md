@@ -298,6 +298,8 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
 - 相同 operation id 重试返回原结果；
 - Windows 文件占用必须可诊断。
 
+修复 blocker 后如需重新执行删除，应使用新的 operation id；原 operation id 始终重放首次结果。
+
 基础 `cleanup` 暂为兼容路径；平台编排器必须协商并使用 strict capability。
 
 ## 10. 错误分类和重试策略

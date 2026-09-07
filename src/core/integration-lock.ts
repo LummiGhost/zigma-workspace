@@ -10,6 +10,7 @@ import {
   deleteIntegrationLock,
   deleteExpiredIntegrationLock,
   updateIntegrationLockHeartbeat,
+  updateIntegrationLockLease,
 } from "../db/queries.js";
 
 function now(): string {
@@ -52,12 +53,25 @@ export function acquireIntegrationLock(
       // Same owner: extend the lease (re-entrant)
       if (existing.owner === owner) {
         const heartbeatTime = now();
-        updateIntegrationLockHeartbeat(db, workspaceId, owner, heartbeatTime);
+        const updated = updateIntegrationLockLease(
+          db,
+          workspaceId,
+          owner,
+          heartbeatTime,
+          expiresAt ?? null,
+        );
+        if (!updated) {
+          throw new ZigmaError(
+            "WORKSPACE_LOCK_EXPIRED",
+            `Integration lock expired before re-acquisition for workspace ${workspaceId}`,
+            { workspaceId, owner },
+          );
+        }
         return {
           id: existing.id,
           workspaceId: existing.workspace_id,
           owner: existing.owner,
-          expiresAt: existing.expires_at,
+          expiresAt: expiresAt ?? null,
           acquiredAt: existing.acquired_at,
           lastHeartbeat: heartbeatTime,
         };
@@ -169,9 +183,14 @@ export function takeoverIntegrationLock(
 
     // Check for expired lock
     const expired = getIntegrationLockExpired(db, workspaceId);
-    if (expired) {
-      deleteIntegrationLock(db, workspaceId, expired.owner);
+    if (!expired || !isExpired(expired.expires_at)) {
+      throw new ZigmaError(
+        "WORKSPACE_LOCK_EXPIRED",
+        `Cannot take over integration lock for workspace ${workspaceId} without an expired lease`,
+        { workspaceId },
+      );
     }
+    deleteIntegrationLock(db, workspaceId, expired.owner);
 
     const acquiredAt = now();
     const lockId = `ilock_${uuidv4()}`;

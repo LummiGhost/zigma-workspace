@@ -173,6 +173,25 @@ export function listWorktrees(
 }
 
 /**
+ * Check whether a path is still registered as a worktree.
+ * Unlike listWorktrees(), verification failures are surfaced so callers that
+ * require proof of removal cannot mistake an unreadable registry for absence.
+ */
+export function isWorktreeRegistered(mirrorPath: string, workspacePath: string): boolean {
+  const output = runGit(["worktree", "list", "--porcelain"], mirrorPath);
+  const normalize = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  const expected = normalize(workspacePath);
+
+  return output.split("\n").some((line) => {
+    if (!line.startsWith("worktree ")) return false;
+    return normalize(line.slice("worktree ".length).trim()) === expected;
+  });
+}
+
+/**
  * Get git status --porcelain output in a worktree.
  */
 export function getStatus(workspacePath: string): string {

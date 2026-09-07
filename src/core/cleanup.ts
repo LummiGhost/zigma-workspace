@@ -22,7 +22,7 @@ import {
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
 import { transition } from "./state-machine.js";
-import { removeWorktree, listWorktrees } from "../git/index.js";
+import { isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 
 function now(): string {
@@ -255,6 +255,7 @@ export function cleanupWorkspaceStrict(
   const workspacePath = row.path;
   const blockers: string[] = [];
   let removed = false;
+  let registrationRemoved = false;
   let message = "";
 
   // Attempt worktree removal
@@ -283,7 +284,17 @@ export function cleanupWorkspaceStrict(
         }
       }
     }
+    try {
+      registrationRemoved = !isWorktreeRegistered(cacheRow.mirror_path, workspacePath);
+      if (!registrationRemoved) {
+        blockers.push("Git worktree registration still exists");
+      }
+    } catch (err) {
+      blockers.push(`Git worktree registration verification failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   } else {
+    // A missing mirror cannot retain a worktree registration.
+    registrationRemoved = true;
     // No mirror — just remove the directory
     if (fs.existsSync(workspacePath)) {
       try {
@@ -301,8 +312,8 @@ export function cleanupWorkspaceStrict(
     }
   }
 
-  if (removed) {
-    // Only transition to CLEANED when directory is confirmed gone
+  if (removed && registrationRemoved) {
+    // Only transition to CLEANED when both directory and registration are confirmed gone
     updateWorkspaceStatus(db, workspaceId, "CLEANED", now());
     emitWorkspaceEvent(db, workspaceId, "workspace.cleaned", { removed, message });
 
@@ -359,6 +370,13 @@ export function cleanupWorkspaceStrict(
 
   const resultJson = JSON.stringify(result);
   updateOperationJournalStatus(db, operationId, workspaceId, "failed", resultJson, now());
+  insertIdempotencyRecord(db, {
+    operation_id: operationId,
+    command: "cleanup",
+    input_hash: inputHash,
+    result_json: resultJson,
+    created_at: ts,
+  });
 
   return result;
 }
