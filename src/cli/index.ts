@@ -19,7 +19,15 @@ import { lockWorkspace, unlockWorkspace, getLock, heartbeat } from "../core/lock
 import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { getArtifactsForSnapshot } from "../core/artifact.js";
-import { cleanupWorkspace } from "../core/cleanup.js";
+import { cleanupWorkspace, cleanupWorkspaceStrict } from "../core/cleanup.js";
+import { reconcileWorkspace } from "../core/reconcile.js";
+import {
+  acquireIntegrationLock,
+  getIntegrationLockState,
+  heartbeatIntegrationLock,
+  releaseIntegrationLock,
+  takeoverIntegrationLock,
+} from "../core/integration-lock.js";
 import { validateDefinition } from "../schema/validator.js";
 import type { WorkspaceDefinition } from "../schema/definition.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
@@ -40,6 +48,10 @@ const WORKSPACE_CAPABILITIES = [
   "workspace-diff-artifact-v1",
   "workspace-snapshot-artifacts-v1",
   "workspace-cleanup-v1",
+  "workspace-heartbeat-v1",
+  "workspace-reconcile-v1",
+  "workspace-integration-lock-v1",
+  "workspace-strict-cleanup-v1",
 ] as const;
 
 // ── Output helpers ──────────────────────────────────────────────────────────
@@ -162,6 +174,17 @@ function reserveOrCheckIdempotency(
         return { type: "conflict" as const };
       }
       const result = JSON.parse(existing.result_json) as unknown;
+      if (
+        result !== null &&
+        typeof result === "object" &&
+        (result as Record<string, unknown>)["__pending"] === true
+      ) {
+        throw new ZigmaError(
+          "OPERATION_PENDING",
+          `Operation ID "${operationId}" is still pending`,
+          { operationId, command },
+        );
+      }
       return { type: "hit" as const, cachedResult: result };
     }
     // Reserve the slot with a sentinel so concurrent processes see "already claimed"
@@ -663,13 +686,36 @@ program
   .description("Clean up a workspace (remove worktree and mark as cleaned)")
   .requiredOption("--workspace <id>", "Workspace ID")
   .option("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .option("--strict", "Require verified directory and Git registration removal")
+  .option("--force", "Allow strict cleanup while a collaboration lock exists")
   .option("--json", "Output JSON")
   .action(
-    async (opts: { workspace: string; operationId?: string; json?: boolean }) => {
+    async (opts: { workspace: string; operationId?: string; strict?: boolean; force?: boolean; json?: boolean }) => {
       const useJson = opts.json ?? false;
       const globalOpts = program.opts<{ stateDir?: string }>();
       try {
         const { config, db } = setup(globalOpts.stateDir);
+
+        if (opts.strict && !opts.operationId) {
+          outputError("INVALID_INPUT", "Strict cleanup requires --operation-id", useJson);
+        }
+        if (opts.strict) {
+          const result = cleanupWorkspaceStrict(db, config, {
+            operationId: opts.operationId!,
+            workspaceId: opts.workspace,
+            force: opts.force ?? false,
+          });
+          outputOk({
+            operation_id: result.operationId,
+            workspace_id: result.workspaceId,
+            path: result.path,
+            removed: result.removed,
+            status: result.status,
+            message: result.message,
+            blockers: result.blockers ?? [],
+          }, useJson);
+          return;
+        }
 
         const idempotencyInput: Record<string, unknown> = { workspace: opts.workspace };
 
@@ -719,6 +765,113 @@ program
       }
     }
   );
+
+// ── governed lifecycle provider operations ──────────────────────────────────
+
+program
+  .command("heartbeat")
+  .description("Heartbeat an owned workspace collaboration lock")
+  .requiredOption("--workspace <id>", "Workspace ID")
+  .requiredOption("--owner <owner>", "Lock owner identifier")
+  .option("--json", "Output JSON")
+  .action((opts: { workspace: string; owner: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      const { db } = setup(program.opts<{ stateDir?: string }>().stateDir);
+      const lock = heartbeat(db, opts.workspace, opts.owner);
+      outputOk({
+        lock_id: lock.id,
+        workspace_id: lock.workspaceId,
+        mode: lock.mode,
+        owner: lock.owner,
+        acquired_at: lock.acquiredAt,
+        expires_at: lock.expiresAt ?? null,
+        last_heartbeat: lock.lastHeartbeat ?? null,
+      }, useJson);
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
+
+program
+  .command("reconcile")
+  .description("Reconcile registry, filesystem, Git, manifest, and operation state")
+  .requiredOption("--workspace <id>", "Workspace ID")
+  .option("--json", "Output JSON")
+  .action((opts: { workspace: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      const { db } = setup(program.opts<{ stateDir?: string }>().stateDir);
+      const result = reconcileWorkspace(db, { workspaceId: opts.workspace });
+      outputOk({
+        workspace_id: result.workspaceId,
+        registry_status: result.registryStatus,
+        directory_exists: result.directoryExists,
+        git_head: result.gitHead,
+        manifest_exists: result.manifestExists,
+        operations: result.operations.map((operation) => ({
+          operation_id: operation.operationId,
+          command: operation.command,
+          status: operation.status,
+          input_hash: operation.inputHash,
+          result_json: operation.resultJson,
+          created_at: operation.createdAt,
+          updated_at: operation.updatedAt,
+        })),
+        reconciled_status: result.reconciledStatus,
+        recommendation: result.recommendation,
+      }, useJson);
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
+
+program
+  .command("integration-lock")
+  .description("Acquire, heartbeat, release, take over, or inspect a Run integration lock")
+  .requiredOption("--workspace <id>", "Run workspace ID")
+  .requiredOption("--action <action>", "acquire, heartbeat, release, takeover, or status")
+  .option("--owner <owner>", "Lock owner identifier")
+  .option("--expires-at <iso>", "ISO 8601 expiry datetime")
+  .option("--json", "Output JSON")
+  .action((opts: { workspace: string; action: string; owner?: string; expiresAt?: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      const { db } = setup(program.opts<{ stateDir?: string }>().stateDir);
+      if (!["acquire", "heartbeat", "release", "takeover", "status"].includes(opts.action)) {
+        outputError("INVALID_INPUT", `Unknown integration-lock action "${opts.action}"`, useJson);
+      }
+      if (opts.action !== "status" && !opts.owner) {
+        outputError("INVALID_INPUT", `integration-lock ${opts.action} requires --owner`, useJson);
+      }
+      if (opts.expiresAt && Number.isNaN(Date.parse(opts.expiresAt))) {
+        outputError("INVALID_INPUT", "--expires-at must be an ISO 8601 datetime", useJson);
+      }
+
+      let lock = null;
+      if (opts.action === "acquire") lock = acquireIntegrationLock(db, opts.workspace, opts.owner!, opts.expiresAt);
+      if (opts.action === "heartbeat") lock = heartbeatIntegrationLock(db, opts.workspace, opts.owner!);
+      if (opts.action === "takeover") lock = takeoverIntegrationLock(db, opts.workspace, opts.owner!, opts.expiresAt);
+      if (opts.action === "release") releaseIntegrationLock(db, opts.workspace, opts.owner!);
+      if (opts.action === "status") lock = getIntegrationLockState(db, opts.workspace);
+
+      outputOk({
+        workspace_id: opts.workspace,
+        action: opts.action,
+        released: opts.action === "release",
+        lock: lock === null ? null : {
+          lock_id: lock.id,
+          workspace_id: lock.workspaceId,
+          owner: lock.owner,
+          expires_at: lock.expiresAt,
+          acquired_at: lock.acquiredAt,
+          last_heartbeat: lock.lastHeartbeat,
+        },
+      }, useJson);
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
 
 // ── list ─────────────────────────────────────────────────────────────────────
 
