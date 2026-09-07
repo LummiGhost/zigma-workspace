@@ -705,6 +705,16 @@ program
             workspaceId: opts.workspace,
             force: opts.force ?? false,
           });
+          if (result.status === "CLEANUP_FAILED") {
+            outputError("WORKSPACE_CLEANUP_FAILED", result.message, useJson, {
+              operation_id: result.operationId,
+              workspace_id: result.workspaceId,
+              path: result.path,
+              removed: result.removed,
+              status: result.status,
+              blockers: result.blockers ?? [],
+            });
+          }
           outputOk({
             operation_id: result.operationId,
             workspace_id: result.workspaceId,

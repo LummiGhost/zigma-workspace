@@ -386,6 +386,21 @@ export function updateIntegrationLockHeartbeat(
   return result.changes > 0;
 }
 
+export function updateIntegrationLockLease(
+  db: Database.Database,
+  workspaceId: string,
+  owner: string,
+  lastHeartbeat: string,
+  expiresAt: string | null,
+): boolean {
+  const result = db.prepare(
+    `UPDATE integration_locks
+     SET last_heartbeat = ?, expires_at = ?
+     WHERE workspace_id = ? AND owner = ? AND (expires_at IS NULL OR expires_at > ?)`
+  ).run(lastHeartbeat, expiresAt, workspaceId, owner, lastHeartbeat);
+  return result.changes > 0;
+}
+
 // ── Operation Journal ────────────────────────────────────────────────────────
 
 export function insertOperationJournal(
