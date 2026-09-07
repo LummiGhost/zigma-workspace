@@ -25,12 +25,14 @@ import {
   isAncestor,
   mergeOrConflict,
   resetHard,
+  getChangedFiles,
 } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 import {
   acquireIntegrationLock,
   releaseIntegrationLock,
 } from "./integration-lock.js";
+import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -87,6 +89,12 @@ export function integrateWorkspace(
   if (!targetRow) {
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Target workspace ${targetWorkspaceId} not found`, { workspaceId: targetWorkspaceId });
   }
+  const sourceManifest = assertWorkspaceBoundary(configForWorkspaceDatabase(db, sourceRow.path), sourceRow);
+  const targetManifest = assertWorkspaceBoundary(configForWorkspaceDatabase(db, targetRow.path), targetRow);
+  assertWritable(targetRow);
+  const sourceChangedFiles = getChangedFiles(sourceRow.path, sourceRow.base_commit);
+  assertChangedPathsAllowed(sourceRow, sourceManifest, sourceChangedFiles);
+  assertChangedPathsAllowed(targetRow, targetManifest, sourceChangedFiles);
 
   const sourceCommit = getHeadCommit(sourceRow.path);
   if (!sourceCommit) {

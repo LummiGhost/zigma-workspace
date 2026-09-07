@@ -521,6 +521,9 @@ interface IntegrationLock {
 | `WORKSPACE_HEAD_CONFLICT` | expectedHead 与实际 HEAD 不匹配 |
 | `WORKSPACE_INTEGRATION_CONFLICT` | 集成合并冲突 |
 | `WORKSPACE_CLEANUP_FAILED` | 严格清理失败（目录或 Git registration 未确认删除） |
+| `WORKSPACE_PATH_POLICY_VIOLATION` | 路径、manifest 或真实路径越过隔离策略 |
+| `WORKSPACE_READ_ONLY` | 对 read-only workspace 请求写入操作 |
+| `WORKSPACE_CAPACITY_EXCEEDED` | state root 已达到配置容量 |
 | `WORKSPACE_OPERATION_INCOMPLETE` | 操作未完成（如无 HEAD commit） |
 | `WORKSPACE_LOCK_OWNER_MISMATCH` | Lock owner 与调用者不匹配 |
 | `WORKSPACE_LOCK_EXPIRED` | Lock 已过期 |

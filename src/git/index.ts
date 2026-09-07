@@ -202,6 +202,23 @@ export function getStatus(workspacePath: string): string {
   }
 }
 
+export function getStatusFiles(workspacePath: string): string[] {
+  const output = runGit(["-c", "core.quotepath=false", "status", "--porcelain=v1", "-z"], workspacePath);
+  const records = output.split("\0").filter(Boolean);
+  const files: string[] = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]!;
+    const status = record.slice(0, 2);
+    files.push(record.slice(3));
+    if (status.includes("R") || status.includes("C")) {
+      const source = records[index + 1];
+      if (source) files.push(source);
+      index += 1;
+    }
+  }
+  return [...new Set(files)];
+}
+
 /**
  * Get a list of changed (tracked) files relative to a base commit.
  */

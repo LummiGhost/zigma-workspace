@@ -34,6 +34,13 @@ import {
   getDefaultBranch,
   configureWorktreeMode,
 } from "../git/index.js";
+import {
+  assertCapacityAvailable,
+  assertPathWithin,
+  assertWorkspaceBoundary,
+  configForWorkspaceDatabase,
+  validateManifestPathPolicy,
+} from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -92,6 +99,7 @@ function ensureRepositoryCache(
   }
 
   const mirrorPath = cacheRow.mirror_path;
+  assertPathWithin(config.repoCacheDir, mirrorPath, "Repository cache path");
 
   // Clone if not present
   if (!fs.existsSync(mirrorPath)) {
@@ -119,8 +127,26 @@ export function createWorkspace(
   input: CreateWorkspaceInput
 ): Workspace {
   checkGitAvailable();
+  assertPathWithin(config.stateDir, config.repoCacheDir, "Repository cache root");
+  assertPathWithin(config.stateDir, config.workspacesDir, "Workspace root");
+  assertPathWithin(config.stateDir, config.snapshotsDir, "Snapshot root");
+  assertCapacityAvailable(config);
 
   const { repositoryUrl, baseRef, branch, mode = "writable" } = input;
+  const allowedPaths = input.allowedPaths ?? ["."];
+  const deniedPaths = [...new Set([...(input.deniedPaths ?? [".env"]), ".zigma-workspace.json"])];
+  validateManifestPathPolicy(allowedPaths, deniedPaths);
+
+  const branchKey = process.platform === "win32" ? branch.toLowerCase() : branch;
+  const branchOwner = listWorkspaces(db).find((workspace) =>
+    workspace.repository_url === repositoryUrl
+    && (process.platform === "win32" ? workspace.branch.toLowerCase() : workspace.branch) === branchKey
+  );
+  if (branchOwner) {
+    throw new ZigmaError("WORKSPACE_STATE_CONFLICT", `Branch ${branch} already belongs to workspace ${branchOwner.id}`, {
+      workspaceId: branchOwner.id, branch, repositoryUrl,
+    });
+  }
 
   // Ensure mirror cache
   const cache = ensureRepositoryCache(db, config, repositoryUrl);
@@ -131,6 +157,7 @@ export function createWorkspace(
   // Workspace ID and path
   const wsId = `ws_${uuidv4()}`;
   const workspacePath = path.join(config.workspacesDir, wsId);
+  assertPathWithin(config.workspacesDir, workspacePath, "Workspace path");
 
   // Create worktree
   createWorktree(cache.mirror_path, workspacePath, branch, baseCommit);
@@ -178,8 +205,8 @@ export function createWorkspace(
     branch,
     path: workspacePath,
     mode,
-    allowed_paths: ["."],
-    denied_paths: [".env", ".zigma-workspace.json"],
+    allowed_paths: allowedPaths,
+    denied_paths: deniedPaths,
   };
 
   const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
@@ -204,6 +231,7 @@ export function bindRun(
   if (!row) {
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${input.workspaceId} not found`, { workspaceId: input.workspaceId });
   }
+  assertWorkspaceBoundary(configForWorkspaceDatabase(db, row.path), row);
 
   const ts = now();
   if (row.status !== "READY" && row.status !== "RUNNING") {

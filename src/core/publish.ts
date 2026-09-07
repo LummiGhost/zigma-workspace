@@ -22,7 +22,9 @@ import {
   branchExists,
   isWorkingTreeDirty,
   resolveRef,
+  getChangedFiles,
 } from "../git/index.js";
+import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -64,6 +66,9 @@ export function publishWorkspace(
   if (!row) {
     throw new ZigmaError("WORKSPACE_NOT_FOUND", `Workspace ${workspaceId} not found`, { workspaceId });
   }
+  const manifest = assertWorkspaceBoundary(configForWorkspaceDatabase(db, row.path), row);
+  assertWritable(row);
+  assertChangedPathsAllowed(row, manifest, getChangedFiles(row.path, row.base_commit));
 
   // Refuse to publish from a dirty working tree
   if (isWorkingTreeDirty(row.path)) {

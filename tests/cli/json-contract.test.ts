@@ -103,6 +103,7 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
         "workspace-reconcile-v1",
         "workspace-integration-lock-v1",
         "workspace-strict-cleanup-v1",
+        "workspace-isolation-policy-v1",
       ],
     });
     expect(fs.existsSync(stateDir)).toBe(false);
@@ -202,6 +203,15 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     const workspacePath = String(created.data?.path);
     const futureExpiry = new Date(Date.now() + 60_000).toISOString();
 
+    const status = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "status", "--workspace", workspaceId, "--json",
+    ]).stdout);
+    expect(status.data?.capacity).toMatchObject({
+      max_bytes: 50 * 1024 * 1024 * 1024,
+      exceeded: false,
+      retain_failed_days: 7,
+    });
+
     const acquired = invokeCli([
       "--state-dir", stateDir, "lock", "--workspace", workspaceId,
       "--mode", "write", "--owner", "worker-a", "--expires-at", futureExpiry, "--json",
@@ -236,6 +246,7 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
       workspace_id: workspaceId,
       directory_exists: true,
       manifest_exists: true,
+      capacity: { max_bytes: 50 * 1024 * 1024 * 1024, exceeded: false, retain_failed_days: 7 },
     });
 
     invokeCli(["--state-dir", stateDir, "unlock", "--workspace", workspaceId, "--json"]);
@@ -326,5 +337,43 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     const replayed = invokeCli(args);
     expect(replayed.status).toBe(1);
     expect(parseSingleEnvelope(replayed.stdout)).toEqual(firstEnvelope);
+  }, 30_000);
+
+  it("persists workflow path policy and rejects configured capacity before clone", () => {
+    const { root, repo } = makeRepo();
+    const stateDir = path.join(root, "policy-state");
+    const definitionPath = path.join(root, "workspace.yml");
+    fs.writeFileSync(definitionPath, [
+      "apiVersion: zigma.ai/v1alpha1",
+      "kind: Workspace",
+      "metadata:",
+      "  name: policy-contract",
+      "spec:",
+      "  type: worktree",
+      `  repository: ${JSON.stringify(repo)}`,
+      "  ref: main",
+      "  allowedPaths:",
+      "    - src",
+      "  deniedPaths:",
+      "    - src/private",
+    ].join("\n"), "utf-8");
+
+    const applied = invokeCli(["--state-dir", stateDir, "apply", "--file", definitionPath, "--json"]);
+    expect(applied.status).toBe(0);
+    const appliedEnvelope = parseSingleEnvelope(applied.stdout);
+    const workspacePath = String(appliedEnvelope.data?.path);
+    const manifest = JSON.parse(fs.readFileSync(path.join(workspacePath, ".zigma-workspace.json"), "utf-8")) as Record<string, unknown>;
+    expect(manifest["allowed_paths"]).toEqual(["src"]);
+    expect(manifest["denied_paths"]).toEqual(["src/private", ".zigma-workspace.json"]);
+
+    const exhaustedState = path.join(root, "exhausted-state");
+    fs.mkdirSync(exhaustedState, { recursive: true });
+    fs.writeFileSync(path.join(exhaustedState, "config.json"), JSON.stringify({ maxDiskGb: 0, retainFailedDays: 2 }), "utf-8");
+    const rejected = invokeCli([
+      "--state-dir", exhaustedState, "create", "--repo", repo, "--base", "main", "--branch", "capacity-rejected", "--json",
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(parseSingleEnvelope(rejected.stdout).error).toMatchObject({ code: "WORKSPACE_CAPACITY_EXCEEDED" });
+    expect(fs.readdirSync(path.join(exhaustedState, "workspaces"))).toEqual([]);
   }, 30_000);
 });

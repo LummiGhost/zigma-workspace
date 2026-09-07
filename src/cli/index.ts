@@ -34,6 +34,7 @@ import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
 import type { Workspace, ZigmaErrorCode } from "../types/index.js";
 import type Database from "better-sqlite3";
+import { getCapacityStatus } from "../core/isolation-policy.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json") as { version: string };
@@ -52,6 +53,7 @@ const WORKSPACE_CAPABILITIES = [
   "workspace-reconcile-v1",
   "workspace-integration-lock-v1",
   "workspace-strict-cleanup-v1",
+  "workspace-isolation-policy-v1",
 ] as const;
 
 // ── Output helpers ──────────────────────────────────────────────────────────
@@ -211,6 +213,17 @@ function commitIdempotency(
 
 function toFileUri(absolutePath: string): string {
   return pathToFileURL(absolutePath).href;
+}
+
+function capacityData(config: ReturnType<typeof getConfig>) {
+  const capacity = getCapacityStatus(config);
+  return {
+    used_bytes: capacity.usedBytes,
+    max_bytes: capacity.maxBytes,
+    available_bytes: capacity.availableBytes,
+    exceeded: capacity.exceeded,
+    retain_failed_days: capacity.retainFailedDays,
+  };
 }
 
 // ── Setup ──────────────────────────────────────────────────────────────────
@@ -492,7 +505,7 @@ program
     const useJson = opts.json ?? false;
     const globalOpts = program.opts<{ stateDir?: string }>();
     try {
-      const { db } = setup(globalOpts.stateDir);
+      const { config, db } = setup(globalOpts.stateDir);
       const workspace = getWorkspace(db, opts.workspace);
       const lock = getLock(db, opts.workspace);
       const cacheRow = getRepositoryCacheByUrl(db, workspace.repositoryUrl);
@@ -527,7 +540,8 @@ program
                   expires_at: lock.expiresAt ?? null,
                   last_heartbeat: lock.lastHeartbeat ?? null,
                 }
-              : null,
+                : null,
+            capacity: capacityData(config),
           },
           true
         );
@@ -811,8 +825,8 @@ program
   .action((opts: { workspace: string; json?: boolean }) => {
     const useJson = opts.json ?? false;
     try {
-      const { db } = setup(program.opts<{ stateDir?: string }>().stateDir);
-      const result = reconcileWorkspace(db, { workspaceId: opts.workspace });
+      const { config, db } = setup(program.opts<{ stateDir?: string }>().stateDir);
+      const result = reconcileWorkspace(db, { workspaceId: opts.workspace }, config);
       outputOk({
         workspace_id: result.workspaceId,
         registry_status: result.registryStatus,
@@ -830,6 +844,13 @@ program
         })),
         reconciled_status: result.reconciledStatus,
         recommendation: result.recommendation,
+        capacity: {
+          used_bytes: result.capacity.usedBytes,
+          max_bytes: result.capacity.maxBytes,
+          available_bytes: result.capacity.availableBytes,
+          exceeded: result.capacity.exceeded,
+          retain_failed_days: result.capacity.retainFailedDays,
+        },
       }, useJson);
     } catch (err) {
       catchError(err, useJson);
@@ -1152,6 +1173,8 @@ program
           projectId: def.metadata.labels?.project,
           taskId: def.metadata.labels?.task,
           flowRunId: def.metadata.annotations?.['zigma.ai/flow-run'],
+          allowedPaths: def.spec.allowedPaths,
+          deniedPaths: def.spec.deniedPaths,
         });
 
         const data = {

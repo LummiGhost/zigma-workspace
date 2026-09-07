@@ -14,7 +14,9 @@ import {
   getDiffStat,
   generatePatch,
   getHeadCommit,
+  getStatusFiles,
 } from "../git/index.js";
+import { assertCapacityAvailable, assertChangedPathsContained, assertPathWithin, assertWorkspaceBoundary } from "./isolation-policy.js";
 
 function sha256(content: string): string {
   return crypto.createHash("sha256").update(content, "utf-8").digest("hex");
@@ -123,6 +125,9 @@ export function collectDiff(
     throw new ZigmaError("WORKSPACE_DIRECTORY_NOT_FOUND", `Workspace directory does not exist: ${row.path}`, { workspaceId, path: row.path });
   }
 
+  assertWorkspaceBoundary(config, row);
+  assertChangedPathsContained(row, getStatusFiles(row.path));
+
   const baseCommit = row.base_commit;
   const workspacePath = row.path;
 
@@ -163,14 +168,20 @@ export function collectDiff(
   if (patch.trim()) {
     patchDigest = sha256(patch);
     if (patchOutPath) {
+      if (!path.isAbsolute(patchOutPath)) {
+        throw new ZigmaError("WORKSPACE_PATH_POLICY_VIOLATION", "Patch output path must be absolute", { patchOutPath });
+      }
+      assertPathWithin(config.snapshotsDir, patchOutPath, "Patch output path");
       resolvedPatchPath = patchOutPath;
     } else {
       const patchFileName = `${workspaceId}-${Date.now()}.patch`;
       resolvedPatchPath = path.join(config.snapshotsDir, patchFileName);
+      assertPathWithin(config.snapshotsDir, resolvedPatchPath, "Patch output path");
     }
   }
 
   if (resolvedPatchPath && patch) {
+    assertCapacityAvailable(config, Buffer.byteLength(patch, "utf-8"));
     fs.mkdirSync(path.dirname(resolvedPatchPath), { recursive: true });
     fs.writeFileSync(resolvedPatchPath, patch, "utf-8");
   }

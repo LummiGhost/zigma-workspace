@@ -21,7 +21,9 @@ import {
   getHeadCommit,
   getCommitFiles,
   getFullStatus,
+  getStatusFiles,
 } from "../git/index.js";
+import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -94,6 +96,11 @@ export function commitWorkspace(
       { workspaceId, path: row.path },
     );
   }
+
+  const config = configForWorkspaceDatabase(db, row.path);
+  const manifest = assertWorkspaceBoundary(config, row);
+  assertWritable(row);
+  assertChangedPathsAllowed(row, manifest, getStatusFiles(row.path));
 
   const commitMsg = message ?? "zigma-workspace: automated commit";
   const ts = now();

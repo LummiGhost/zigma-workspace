@@ -10,6 +10,7 @@ import { createSnapshot } from "./snapshot.js";
 vi.mock("../git/index.js", () => ({
   getHeadCommit: vi.fn(() => "head123"),
   getChangedFiles: vi.fn(() => ["a"]),
+  getStatusFiles: vi.fn(() => []),
   generatePatch: vi.fn(() => "diff --git a/a b/a\n"),
 }));
 
@@ -26,8 +27,8 @@ describe("createSnapshot integration", () => {
   it("inserts the parent snapshot before its artifacts", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-snapshot-test-"));
     tempDirs.push(tempDir);
-    const workspacePath = path.join(tempDir, "workspace");
-    fs.mkdirSync(workspacePath);
+    const workspacePath = path.join(tempDir, "workspaces", "ws_snapshot");
+    fs.mkdirSync(workspacePath, { recursive: true });
     const config: ZigmaWorkspaceConfig = {
       stateDir: tempDir,
       repoCacheDir: path.join(tempDir, "repos"),
@@ -37,6 +38,12 @@ describe("createSnapshot integration", () => {
       dbPath: path.join(tempDir, "registry.db"),
     };
     const db = openDb(config);
+    fs.writeFileSync(path.join(workspacePath, ".zigma-workspace.json"), JSON.stringify({
+      workspace_id: "ws_snapshot", project_id: null, task_id: null, flow_run_id: null,
+      workflow_run_id: null, job_id: null, step_id: null, agent_id: null,
+      repo: "https://example.test/repo.git", base_ref: "main", base_commit: "base123",
+      branch: "feature", path: workspacePath, mode: "writable", allowed_paths: ["."], denied_paths: [],
+    }), "utf-8");
     insertWorkspace(db, {
       id: "ws_snapshot",
       project_id: null,

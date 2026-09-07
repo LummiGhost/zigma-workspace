@@ -24,6 +24,7 @@ import { emitWorkspaceEvent } from "../core/events.js";
 import { transition } from "./state-machine.js";
 import { isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
+import { assertWorkspaceRootBoundary } from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -54,6 +55,7 @@ export function cleanupWorkspace(
       message: "Workspace is already cleaned",
     };
   }
+  assertWorkspaceRootBoundary(config, row);
 
   const activeLock = getActiveLockForWorkspace(db, workspaceId);
   if (activeLock) {
@@ -225,6 +227,7 @@ export function cleanupWorkspaceStrict(
       message: "Workspace is already cleaned",
     };
   }
+  assertWorkspaceRootBoundary(config, row);
 
   const activeLock = getActiveLockForWorkspace(db, workspaceId);
   if (activeLock) {
