@@ -133,6 +133,8 @@ export interface CreateWorkspaceInput {
   jobId?: string;
   stepId?: string;
   agentId?: string;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
 }
 
 export interface BindWorkspaceRunInput {
@@ -152,6 +154,8 @@ export interface ZigmaWorkspaceConfig {
   snapshotsDir: string;
   logsDir: string;
   dbPath: string;
+  maxDiskBytes?: number;
+  retainFailedDays?: number;
 }
 
 export interface WorkspaceRow {
@@ -298,7 +302,10 @@ export type ZigmaErrorCode =
   | "WORKSPACE_CLEANUP_FAILED"
   | "WORKSPACE_OPERATION_INCOMPLETE"
   | "WORKSPACE_LOCK_OWNER_MISMATCH"
-  | "WORKSPACE_LOCK_EXPIRED";
+  | "WORKSPACE_LOCK_EXPIRED"
+  | "WORKSPACE_PATH_POLICY_VIOLATION"
+  | "WORKSPACE_READ_ONLY"
+  | "WORKSPACE_CAPACITY_EXCEEDED";
 
 export class ZigmaError extends Error {
   readonly code: ZigmaErrorCode;
@@ -489,6 +496,15 @@ export interface ReconcileWorkspaceResult {
   operations: ReconciledOperation[];
   reconciledStatus: ReconciledStatus;
   recommendation: string;
+  capacity: WorkspaceCapacityStatus;
+}
+
+export interface WorkspaceCapacityStatus {
+  usedBytes: number;
+  maxBytes: number;
+  availableBytes: number;
+  exceeded: boolean;
+  retainFailedDays: number;
 }
 
 // ── Cleanup strict ───────────────────────────────────────────────────────────

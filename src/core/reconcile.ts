@@ -5,11 +5,13 @@ import type {
   ReconcileWorkspaceResult,
   ReconciledOperation,
   ReconciledStatus,
+  ZigmaWorkspaceConfig,
 } from "../types/index.js";
 import { ZigmaError } from "../types/index.js";
 import { getWorkspaceById } from "../db/queries.js";
 import { listOperationJournalForWorkspace } from "../db/queries.js";
 import { getHeadCommit } from "../git/index.js";
+import { configForWorkspaceDatabase, getCapacityStatus } from "./isolation-policy.js";
 
 /**
  * Reconcile a workspace's actual state against the registry, filesystem,
@@ -22,10 +24,12 @@ import { getHeadCommit } from "../git/index.js";
 export function reconcileWorkspace(
   db: Database.Database,
   input: ReconcileWorkspaceInput,
+  config?: ZigmaWorkspaceConfig,
 ): ReconcileWorkspaceResult {
   const { workspaceId } = input;
 
   const row = getWorkspaceById(db, workspaceId);
+  const effectiveConfig = config ?? configForWorkspaceDatabase(db, row?.path ?? `${process.cwd()}/workspaces/${workspaceId}`);
 
   const registryStatus = row?.status ?? "UNKNOWN";
   const directoryExists = row ? fs.existsSync(row.path) : false;
@@ -107,5 +111,6 @@ export function reconcileWorkspace(
     operations,
     reconciledStatus,
     recommendation,
+    capacity: getCapacityStatus(effectiveConfig),
   };
 }

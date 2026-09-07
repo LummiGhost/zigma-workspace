@@ -19,6 +19,8 @@ import {
 import { publishWorkspace } from "../../src/core/publish.js";
 import { reconcileWorkspace } from "../../src/core/reconcile.js";
 import { cleanupWorkspaceStrict } from "../../src/core/cleanup.js";
+import { collectDiff } from "../../src/core/diff.js";
+import { createSnapshot } from "../../src/core/snapshot.js";
 import { lockWorkspace } from "../../src/core/lock.js";
 import {
   acquireIntegrationLock,
@@ -1183,5 +1185,88 @@ describe("expired integration lock takeover", () => {
     const lock2 = acquireIntegrationLock(ctx.db, ws.id, "owner-2");
     expect(lock2.owner).toBe("owner-2");
     expect(lock2.id).not.toBe(lock1.id);
+  });
+});
+
+describe("M3.2 isolation policy", () => {
+  it("rejects commits from read-only workspaces before staging", () => {
+    const ctx = setupRepo();
+    const ws = createWorkspace(ctx.db, ctx.config, {
+      repositoryUrl: ctx.repo, baseRef: "main", branch: "readonly-policy", mode: "read-only",
+    });
+    fs.writeFileSync(path.join(ws.path, "change.txt"), "change\n", "utf-8");
+
+    expect(() => commitWorkspace(ctx.db, {
+      operationId: uniqueId(), workspaceId: ws.id, message: "must reject",
+    })).toThrow(expect.objectContaining({ code: "WORKSPACE_READ_ONLY" }));
+    expect(git(ws.path, "status", "--porcelain")).toContain("change.txt");
+  });
+
+  it("allows read-only diff and snapshot evidence without mutating the workspace", () => {
+    const ctx = setupRepo();
+    const ws = createWorkspace(ctx.db, ctx.config, {
+      repositoryUrl: ctx.repo, baseRef: "main", branch: "readonly-evidence", mode: "read-only",
+    });
+    fs.writeFileSync(path.join(ws.path, "evidence.txt"), "evidence\n", "utf-8");
+    const before = git(ws.path, "status", "--porcelain");
+
+    const diff = collectDiff(ctx.db, ctx.config, ws.id);
+    const snapshot = createSnapshot(ctx.db, ctx.config, ws.id);
+
+    expect(diff.untrackedFiles).toContain("evidence.txt");
+    expect(snapshot.workspaceId).toBe(ws.id);
+    expect(git(ws.path, "status", "--porcelain")).toBe(before);
+  });
+
+  it("rejects denied changed paths before staging", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "denied-policy");
+    prepareWorkspaceForCommit(ws.path);
+    fs.writeFileSync(path.join(ws.path, ".env"), "SECRET=value\n", "utf-8");
+
+    expect(() => commitWorkspace(ctx.db, {
+      operationId: uniqueId(), workspaceId: ws.id, message: "must reject",
+    })).toThrow(expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }));
+    expect(git(ws.path, "diff", "--cached", "--name-only")).toBe("");
+  });
+
+  it("rejects deterministic capacity exhaustion before cloning", () => {
+    const ctx = setupRepo();
+    const constrained = { ...ctx.config, maxDiskBytes: 0 };
+    expect(() => createWorkspace(ctx.db, constrained, {
+      repositoryUrl: ctx.repo, baseRef: "main", branch: "capacity-policy",
+    })).toThrow(expect.objectContaining({ code: "WORKSPACE_CAPACITY_EXCEEDED" }));
+    expect(fs.readdirSync(ctx.config.workspacesDir)).toEqual([]);
+  });
+
+  it("rejects a duplicate active branch before creating another path", () => {
+    const ctx = setupRepo();
+    makeWorkspace(ctx, "unique-attempt-branch");
+    const before = fs.readdirSync(ctx.config.workspacesDir);
+    expect(() => makeWorkspace(ctx, "unique-attempt-branch")).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_STATE_CONFLICT" }),
+    );
+    expect(fs.readdirSync(ctx.config.workspacesDir)).toEqual(before);
+  });
+
+  it("rejects a registry workspace path outside the configured root", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "cross-root-policy");
+    const outside = path.join(ctx.root, ws.id);
+    fs.mkdirSync(outside);
+    ctx.db.prepare("UPDATE workspaces SET path = ? WHERE id = ?").run(outside, ws.id);
+
+    expect(() => commitWorkspace(ctx.db, {
+      operationId: uniqueId(), workspaceId: ws.id, message: "must reject",
+    })).toThrow(expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }));
+  });
+
+  it("rejects manifest traversal before repository cache side effects", () => {
+    const ctx = setupRepo();
+    expect(() => createWorkspace(ctx.db, ctx.config, {
+      repositoryUrl: ctx.repo, baseRef: "main", branch: "traversal-policy", allowedPaths: ["../outside"],
+    })).toThrow(expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }));
+    expect(fs.readdirSync(ctx.config.repoCacheDir)).toEqual([]);
+    expect(fs.readdirSync(ctx.config.workspacesDir)).toEqual([]);
   });
 });

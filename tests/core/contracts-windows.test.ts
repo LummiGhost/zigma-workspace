@@ -22,6 +22,8 @@ import { cleanupWorkspaceStrict } from "../../src/core/cleanup.js";
 import { getHeadCommit } from "../../src/git/index.js";
 import type { Database } from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
+import { assertPathWithin, readAndValidateManifest } from "../../src/core/isolation-policy.js";
+import { getWorkspaceById } from "../../src/db/queries.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +90,35 @@ function makeWorkspace(
 function uniqueId(): string {
   return crypto.randomUUID();
 }
+
+describe.skipIf(!isWindows)("Windows M3.2 path isolation", () => {
+  it("rejects a junction that escapes the workspace root", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-junction-root-"));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-junction-outside-"));
+    tempDirs.push(root, outside);
+    const junction = path.join(root, "escape");
+    fs.symlinkSync(outside, junction, "junction");
+
+    expect(() => assertPathWithin(root, path.join(junction, "secret.txt"), "Changed path")).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }),
+    );
+  });
+
+  it("rejects case-fold aliases in manifest policy", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "case-alias-policy");
+    const manifestPath = path.join(ws.path, ".zigma-workspace.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest["allowed_paths"] = ["Src"];
+    manifest["denied_paths"] = ["src"];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf-8");
+    const row = getWorkspaceById(ctx.db, ws.id)!;
+
+    expect(() => readAndValidateManifest(row)).toThrow(
+      expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }),
+    );
+  });
+});
 
 afterEach(() => {
   closeDb();

@@ -316,9 +316,20 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
 | 清理 | `WORKSPACE_CLEANUP_FAILED` | 保留 workspace 和 blockers，释放句柄后重试 |
 | 内部 | `INTERNAL_ERROR` | 有界重试；重复失败升级人工处理 |
 
+## 11. Workspace isolation policy
+
+协商 `workspace-isolation-policy-v1` 后，Provider 在任何文件系统副作用前执行以下检查：
+
+- workspace、repository cache、snapshot 和 artifact 必须位于配置的 state roots 内；
+- 使用真实路径校验拒绝 `..`、绝对路径、symlink/junction escape 和 Windows case-fold alias；
+- workflow `spec.allowedPaths` / `spec.deniedPaths` 会写入 manifest，并在 commit 前对全部 tracked、untracked、rename 和 delete 路径 fail closed；
+- read-only workspace 可以生成 diff/snapshot 证据，但不能 commit、作为 integration target 或 publish；
+- `config.json` 的 `maxDiskGb` 和 `retainFailedDays` 会出现在 status/reconcile capacity 结果中；容量不足返回确定性的 `WORKSPACE_CAPACITY_EXCEEDED`；
+- 同一 repository 的 active workspace 不得复用 branch，且每个 workspace path 由唯一 workspace id 派生。
+
 错误 message 供人阅读，自动化只能分支处理 code 和结构化 details。
 
-## 11. Provider 证据和已知缺口
+## 12. Provider 证据和已知缺口
 
 当前 provider test 归属：
 

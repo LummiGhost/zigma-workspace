@@ -305,6 +305,10 @@ CLI 使用 `--state-dir` 选项或 `ZIGMA_WORKSPACE_STATE_DIR` 环境变量指�
 
 Provider 状态统一使用 registry 的大写规范值，例如 `CREATED`、`PREPARING`、`READY`、`RUNNING`、`WAIT_REVIEW`、`MERGING`、`MERGED`、`CONFLICT`、`ARCHIVED`、`CLEANUP_FAILED`、`CLEANED` 和 `FAILED`。
 
+`config.json` 的 `maxDiskGb`（默认 50）和 `retainFailedDays`（默认 7）组成容量与保留策略。`status --json` 和 `reconcile --json` 返回 `capacity`，包含 `used_bytes`、`max_bytes`、`available_bytes`、`exceeded` 和 `retain_failed_days`。
+
+通过 `apply` 创建 worktree 时，定义中的 `spec.allowedPaths` 与 `spec.deniedPaths` 会进入 `.zigma-workspace.json` 并由 mutation boundary 强制执行。patch 输出只能写入 snapshots root；外部绝对路径和相对 traversal 均被拒绝。
+
 `--strict` 要求同时提供 `--operation-id`；只有目录和 Git worktree registration
 都确认不存在时才返回 `status: "CLEANED"`。平台编排器应使用 strict 模式，基础
 模式仅用于兼容旧调用方。

@@ -9,9 +9,10 @@ import {
   listSnapshotsForWorkspace,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
-import { generatePatch, getChangedFiles, getHeadCommit } from "../git/index.js";
+import { generatePatch, getChangedFiles, getHeadCommit, getStatusFiles } from "../git/index.js";
 import { createArtifact } from "./artifact.js";
 import { filterFiles, readWorkspacePathFilter } from "./diff.js";
+import { assertCapacityAvailable, assertChangedPathsContained, assertWorkspaceBoundary } from "./isolation-policy.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -28,6 +29,8 @@ export function createSnapshot(
   }
 
   const snapId = `snap_${uuidv4()}`;
+  assertWorkspaceBoundary(config, row);
+  assertChangedPathsContained(row, getStatusFiles(row.path));
   const ts = now();
   const headCommit = getHeadCommit(row.path);
   const pathFilter = readWorkspacePathFilter(row.path);
@@ -47,16 +50,6 @@ export function createSnapshot(
     }
   }
 
-  // The parent snapshot must exist before artifacts because artifacts.snapshot_id
-  // is protected by a foreign key.
-  insertWorkspaceSnapshot(db, {
-    id: snapId,
-    workspace_id: workspaceId,
-    kind: snapshotKind,
-    created_at: ts,
-  });
-
-  // Collect metadata as a metadata artifact
   const metadata = {
     snapshot_id: snapId,
     workspace_id: workspaceId,
@@ -70,6 +63,19 @@ export function createSnapshot(
     status: row.status,
     path: row.path,
   };
+  const metadataContent = JSON.stringify(metadata, null, 2);
+  assertCapacityAvailable(
+    config,
+    Buffer.byteLength(metadataContent, "utf-8") + (patch === null ? 0 : Buffer.byteLength(patch, "utf-8")),
+  );
+
+  // Capacity and policy are verified before the parent row is inserted.
+  insertWorkspaceSnapshot(db, {
+    id: snapId,
+    workspace_id: workspaceId,
+    kind: snapshotKind,
+    created_at: ts,
+  });
 
   createArtifact(
     db,
@@ -77,7 +83,7 @@ export function createSnapshot(
     snapId,
     workspaceId,
     "metadata",
-    JSON.stringify(metadata, null, 2),
+    metadataContent,
     `${snapId}.metadata.json`,
   );
 

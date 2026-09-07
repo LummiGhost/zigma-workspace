@@ -19,6 +19,18 @@ export function getConfig(stateDirOverride?: string): ZigmaWorkspaceConfig {
     throw new ZigmaError("INVALID_INPUT", `--state-dir must be an absolute path, got: "${stateDirOverride}"`);
   }
   const stateDir = stateDirOverride ?? getStateDir();
+  const configPath = path.join(stateDir, "config.json");
+  let maxDiskGb = 50;
+  let retainFailedDays = 7;
+  if (fs.existsSync(configPath)) {
+    const stored = JSON.parse(fs.readFileSync(configPath, "utf-8")) as Record<string, unknown>;
+    if (typeof stored["maxDiskGb"] === "number" && Number.isFinite(stored["maxDiskGb"]) && stored["maxDiskGb"] >= 0) {
+      maxDiskGb = stored["maxDiskGb"];
+    }
+    if (typeof stored["retainFailedDays"] === "number" && Number.isInteger(stored["retainFailedDays"]) && stored["retainFailedDays"] >= 0) {
+      retainFailedDays = stored["retainFailedDays"];
+    }
+  }
   return {
     stateDir,
     repoCacheDir: path.join(stateDir, "repo-cache"),
@@ -26,6 +38,8 @@ export function getConfig(stateDirOverride?: string): ZigmaWorkspaceConfig {
     snapshotsDir: path.join(stateDir, "snapshots"),
     logsDir: path.join(stateDir, "logs"),
     dbPath: path.join(stateDir, "registry.db"),
+    maxDiskBytes: Math.floor(maxDiskGb * 1024 * 1024 * 1024),
+    retainFailedDays,
   };
 }
 
