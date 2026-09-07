@@ -75,11 +75,11 @@ stdout 都恰好输出一个 JSON document，且不包含日志、进度或人�
 | bind-run | 稳定 | 稳定 | 绑定 task/flow run，重复绑定需满足状态约束 |
 | status/list | 稳定 | 稳定 | 返回 registry 状态、路径、Git 基线和协作锁 |
 | lock/unlock | 稳定 | 稳定 | 多读或单写；获取在 SQLite transaction 中完成 |
-| heartbeat | 未暴露 | 可用 | 校验 owner；过期或 owner 不符时失败 |
+| heartbeat | 稳定 | 稳定 | 校验 owner；过期或 owner 不符时失败 |
 | diff/snapshot | 稳定 | 稳定 | 受 manifest 过滤；产物带 SHA-256 digest |
-| cleanup | 稳定（基础） | 稳定（基础及 strict） | 基础 CLI 必须检查 `removed`；strict API 验证目录和 registration |
-| reconcile | 未暴露 | 可用 | 对账 registry、目录、HEAD、manifest 和 operation journal |
-| integration lock | 未暴露 | 可用 | 独占、owner 校验、过期接管和心跳 |
+| cleanup | 稳定（基础及 `--strict`） | 稳定（基础及 strict） | strict 模式验证目录和 registration，且要求 operation id |
+| reconcile | 稳定 | 稳定 | 对账 registry、目录、HEAD、manifest 和 operation journal |
+| integration lock | 稳定 | 稳定 | 独占、owner 校验、过期接管和心跳 |
 | commit/integrate/publish | 未暴露 | 可用 | operation-id、CAS 和结构化冲突结果 |
 
 “可用”表示当前实现和 provider tests 已存在，但在 M3 完成前不能被远程
@@ -108,7 +108,11 @@ snake_case 命名：
     "workspace-bind-run-v1",
     "workspace-diff-artifact-v1",
     "workspace-snapshot-artifacts-v1",
-    "workspace-cleanup-v1"
+    "workspace-cleanup-v1",
+    "workspace-heartbeat-v1",
+    "workspace-reconcile-v1",
+    "workspace-integration-lock-v1",
+    "workspace-strict-cleanup-v1"
   ]
 }
 ```
@@ -216,14 +220,13 @@ operation id。
 | --- | --- |
 | 相同 operation id、相同规范化输入、首次已完成 | 返回首次持久化结果，不重复副作用 |
 | 相同 operation id、不同输入 | `OPERATION_ID_CONFLICT` |
-| 两个进程同时提交相同 operation id | SQLite reservation 阻止重复副作用；当前 CLI 的竞争者可能读到内部 `{"__pending":true}` sentinel，这是已知协议缺口，不能当作成功 |
-| 进程在 reservation 后崩溃 | CLI 幂等表可能遗留 pending sentinel；v0.3 API 的 operation journal 保留 `started`，调用方必须 reconcile，不能盲重做 |
+| 两个进程同时提交相同 operation id | SQLite reservation 阻止重复副作用；竞争者收到显式 `OPERATION_PENDING`，不得当作成功 |
+| 进程在 reservation 后崩溃 | CLI 返回 `OPERATION_PENDING`；v0.3 API 的 operation journal 保留 `started`，调用方必须 reconcile，不能盲重做 |
 | 不同 operation id 请求同一非并发安全变更 | 由状态 CAS 或 lock 拒绝其中一个 |
 
 调用方重试必须复用 operation id。因超时生成新 id 会把一次逻辑操作变成两次
-不同请求，Workspace 不保证去重。M3 前，CLI 调用方若收到不符合版本化 envelope
-的 pending sentinel，必须把它当作“结果未决”，退避并通过 status/reconcile 查询，
-不得报告成功。M3 必须用显式 `OPERATION_PENDING` 或有界等待替代 sentinel 外泄。
+不同请求，Workspace 不保证去重。CLI 调用方收到 `OPERATION_PENDING` 时必须把
+结果视为未决，退避并通过 status/reconcile 查询，不得报告成功或换用新 id 盲重做。
 
 ## 7. 写隔离、锁和 lease
 
@@ -287,7 +290,7 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
 
 ### 9.2 Strict cleanup
 
-`cleanupWorkspaceStrict` 是 M3 目标语义：
+`cleanup --strict --operation-id <id>` 与 `cleanupWorkspaceStrict` 提供以下语义：
 
 - 要求 operation id；
 - 删除失败返回 `status: "CLEANUP_FAILED"`、`removed: false` 和 blockers；
@@ -295,7 +298,7 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
 - 相同 operation id 重试返回原结果；
 - Windows 文件占用必须可诊断。
 
-M3 应把 strict cleanup 暴露为稳定 CLI，并让基础 `cleanup` 迁移到同一语义。
+基础 `cleanup` 暂为兼容路径；平台编排器必须协商并使用 strict capability。
 
 ## 10. 错误分类和重试策略
 
@@ -323,21 +326,18 @@ M3 应把 strict cleanup 暴露为稳定 CLI，并让基础 `cleanup` 迁移到�
   重试和并发边界。
 - `tests/core/workspace-dogfood.test.ts`：worktree 隔离、manifest 过滤、多读单写、
   snapshot 和 cleanup 的真实 Git 流程。
-- `src/cli/index.ts`：实现 operation-id reservation 和 JSON envelope；当前缺少
-  独立 CLI 黑盒契约测试，因此只把已列出的 CLI 子集视为 M0 基线。
+- `tests/cli/json-contract.test.ts`：真实 CLI stdout envelope、artifact、operation-id、
+  heartbeat、reconcile、integration lock 和 strict cleanup 黑盒契约。
 
 M3 前仍需关闭的契约缺口：
 
-1. 把 heartbeat、reconcile、integration lock 和 strict cleanup 暴露为 CLI v1。
-2. 为 Workspace CLI 和 Core adapter 建立针对真实 CLI JSON 的 provider/consumer
+1. 为 Core adapter 建立针对真实 CLI JSON 的 consumer
    黑盒契约测试。
-3. 禁止 CLI 暴露 idempotency pending sentinel；改为显式 pending 错误或等待首次
-   执行的持久化结果。
-4. 统一 README、CLI 和 API 的状态名，淘汰旧的小写展示语义。
-5. 对 workspace root、junction/symlink 和 Windows 大小写路径增加逃逸测试。
-6. 增加取消后“子进程退出 -> 句柄释放 -> reconcile -> strict cleanup”的长时
+2. 统一 README、CLI 和 API 的状态名，淘汰旧的小写展示语义。
+3. 对 workspace root、junction/symlink 和 Windows 大小写路径增加逃逸测试。
+4. 增加取消后“子进程退出 -> 句柄释放 -> reconcile -> strict cleanup”的长时
    soak test。
-7. 为跨宿主 artifact URI 增加持久化 store；在此之前 `file:` 仅限本机。
+5. 为跨宿主 artifact URI 增加持久化 store；在此之前 `file:` 仅限本机。
 
 这些缺口不削弱本文对当前行为的描述；它们限制的是哪些能力可以在 M0 后立即
 作为稳定跨进程协议使用。

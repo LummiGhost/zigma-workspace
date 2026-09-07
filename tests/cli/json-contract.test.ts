@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
 
 const cliPath = path.resolve("src/cli/index.ts");
 const packageVersion = (JSON.parse(fs.readFileSync(path.resolve("package.json"), "utf-8")) as { version: string }).version;
@@ -58,6 +59,14 @@ function assertV1Envelope(envelope: JsonEnvelope, ok: boolean): void {
   expect(envelope.ok).toBe(ok);
 }
 
+function canonicalHash(value: Record<string, unknown>): string {
+  const sorted = Object.keys(value).sort().reduce<Record<string, unknown>>((result, key) => {
+    result[key] = value[key];
+    return result;
+  }, {});
+  return crypto.createHash("sha256").update(JSON.stringify(sorted), "utf-8").digest("hex");
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -90,6 +99,10 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
         "workspace-diff-artifact-v1",
         "workspace-snapshot-artifacts-v1",
         "workspace-cleanup-v1",
+        "workspace-heartbeat-v1",
+        "workspace-reconcile-v1",
+        "workspace-integration-lock-v1",
+        "workspace-strict-cleanup-v1",
       ],
     });
     expect(fs.existsSync(stateDir)).toBe(false);
@@ -177,5 +190,107 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     const envelope = parseSingleEnvelope(conflict.stdout);
     assertV1Envelope(envelope, false);
     expect(envelope.error).toMatchObject({ code: "OPERATION_ID_CONFLICT" });
+  });
+
+  it("governs lock heartbeat, reconciliation, integration ownership, and strict cleanup", () => {
+    const { repo, stateDir } = makeRepo();
+    const created = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "create", "--repo", repo, "--base", "main", "--branch", "governed-lifecycle", "--json",
+    ]).stdout);
+    const workspaceId = String(created.data?.workspace_id);
+    const workspacePath = String(created.data?.path);
+    const futureExpiry = new Date(Date.now() + 60_000).toISOString();
+
+    const acquired = invokeCli([
+      "--state-dir", stateDir, "lock", "--workspace", workspaceId,
+      "--mode", "write", "--owner", "worker-a", "--expires-at", futureExpiry, "--json",
+    ]);
+    assertV1Envelope(parseSingleEnvelope(acquired.stdout), true);
+    const heartbeat = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "heartbeat", "--workspace", workspaceId,
+      "--owner", "worker-a", "--json",
+    ]).stdout);
+    expect(heartbeat.data).toMatchObject({ workspace_id: workspaceId, owner: "worker-a" });
+
+    const integration = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "integration-lock", "--workspace", workspaceId,
+      "--action", "acquire", "--owner", "integrator-a", "--expires-at", futureExpiry, "--json",
+    ]).stdout);
+    expect(integration.data?.lock).toMatchObject({ workspace_id: workspaceId, owner: "integrator-a" });
+    const wrongOwner = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "integration-lock", "--workspace", workspaceId,
+      "--action", "release", "--owner", "integrator-b", "--json",
+    ]).stdout);
+    assertV1Envelope(wrongOwner, false);
+    expect(wrongOwner.error?.code).toBe("WORKSPACE_LOCK_OWNER_MISMATCH");
+    assertV1Envelope(parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "integration-lock", "--workspace", workspaceId,
+      "--action", "release", "--owner", "integrator-a", "--json",
+    ]).stdout), true);
+
+    const reconciled = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "reconcile", "--workspace", workspaceId, "--json",
+    ]).stdout);
+    expect(reconciled.data).toMatchObject({
+      workspace_id: workspaceId,
+      directory_exists: true,
+      manifest_exists: true,
+    });
+
+    invokeCli(["--state-dir", stateDir, "unlock", "--workspace", workspaceId, "--json"]);
+    const operationId = crypto.randomUUID();
+    const cleaned = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "cleanup", "--workspace", workspaceId,
+      "--strict", "--operation-id", operationId, "--json",
+    ]).stdout);
+    assertV1Envelope(cleaned, true);
+    expect(cleaned.data).toMatchObject({ workspace_id: workspaceId, removed: true, status: "CLEANED" });
+    expect(fs.existsSync(workspacePath)).toBe(false);
+
+    const replayed = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir, "cleanup", "--workspace", workspaceId,
+      "--strict", "--operation-id", operationId, "--json",
+    ]).stdout);
+    expect(replayed).toEqual(cleaned);
+  }, 30_000);
+
+  it("classifies an in-flight idempotent reservation without exposing its sentinel", () => {
+    const { repo, stateDir } = makeRepo();
+    const created = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "create", "--repo", repo, "--base", "main", "--branch", "pending-contract", "--json",
+    ]).stdout);
+    const workspaceId = String(created.data?.workspace_id);
+    const operationId = crypto.randomUUID();
+    const input = {
+      agent: null,
+      flowRun: "flow-pending",
+      job: null,
+      step: null,
+      task: null,
+      workflowRun: null,
+      workspace: workspaceId,
+    };
+    const db = new Database(path.join(stateDir, "registry.db"));
+    db.prepare(`INSERT INTO workspace_idempotency
+      (operation_id, command, input_hash, result_json, created_at)
+      VALUES (?, ?, ?, ?, ?)`)
+      .run(operationId, "bind-run", canonicalHash(input), JSON.stringify({ __pending: true }), new Date().toISOString());
+    db.close();
+
+    const pending = invokeCli([
+      "--state-dir", stateDir, "bind-run", "--workspace", workspaceId,
+      "--flow-run", "flow-pending", "--operation-id", operationId, "--json",
+    ]);
+    expect(pending.status).toBe(1);
+    expect(pending.stderr).toBe("");
+    const envelope = parseSingleEnvelope(pending.stdout);
+    assertV1Envelope(envelope, false);
+    expect(envelope.error).toMatchObject({
+      code: "OPERATION_PENDING",
+      details: { operationId, command: "bind-run" },
+    });
+    expect(pending.stdout).not.toContain("__pending");
   });
 });

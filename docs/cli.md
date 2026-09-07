@@ -82,7 +82,11 @@ zigma-workspace contract-info --json
     "workspace-bind-run-v1",
     "workspace-diff-artifact-v1",
     "workspace-snapshot-artifacts-v1",
-    "workspace-cleanup-v1"
+    "workspace-cleanup-v1",
+    "workspace-heartbeat-v1",
+    "workspace-reconcile-v1",
+    "workspace-integration-lock-v1",
+    "workspace-strict-cleanup-v1"
   ]
 }
 ```
@@ -285,10 +289,10 @@ artifact；有 tracked diff 时额外包含一个 patch artifact。
 
 ## `cleanup`
 
-删除 worktree 并将 registry 中的 workspace 状态改为 `cleaned`。
+删除 worktree 并将 registry 中的 workspace 状态改为 `CLEANED`。
 
 ```text
-zigma-workspace cleanup --workspace <id> [--operation-id <id>] [--json]
+zigma-workspace cleanup --workspace <id> [--operation-id <id>] [--strict] [--force] [--json]
 ```
 
 优先执行 `git worktree remove --force` 并 prune；失败时会尝试直接递归删除 workspace 目录。重复清理返回成功且 `removed: false`。
@@ -299,4 +303,27 @@ zigma-workspace cleanup --workspace <id> [--operation-id <id>] [--json]
 
 CLI 使用 `--state-dir` 选项或 `ZIGMA_WORKSPACE_STATE_DIR` 环境变量指定状态根目录，均未设置时使用 `~/.zigma-workspace`。首次运行任何业务命令都会创建目录、`config.json` 和 SQLite schema（含幂等记录表 `workspace_idempotency`）。
 
-当前可能出现的 workspace 状态包括：`created`、`prepared`、`locked`、`active`、`archived`、`cleaned`、`failed`。现有 CLI 实际写入 `prepared`、`active`、`locked` 和 `cleaned`；`created` 仅是创建过程中的短暂数据库状态。
+Provider 状态统一使用 registry 的大写规范值，例如 `CREATED`、`PREPARING`、`READY`、`RUNNING`、`WAIT_REVIEW`、`MERGING`、`MERGED`、`CONFLICT`、`ARCHIVED`、`CLEANUP_FAILED`、`CLEANED` 和 `FAILED`。
+
+`--strict` 要求同时提供 `--operation-id`；只有目录和 Git worktree registration
+都确认不存在时才返回 `status: "CLEANED"`。平台编排器应使用 strict 模式，基础
+模式仅用于兼容旧调用方。
+
+## `heartbeat` / `reconcile`
+
+```text
+zigma-workspace heartbeat --workspace <id> --owner <owner> [--json]
+zigma-workspace reconcile --workspace <id> [--json]
+```
+
+heartbeat 只接受当前 active lock owner。reconcile 是只读操作，返回 registry、
+目录、Git HEAD、manifest 和 operation journal 的联合结论。
+
+## `integration-lock`
+
+```text
+zigma-workspace integration-lock --workspace <id> --action <acquire|heartbeat|release|takeover|status> [--owner <owner>] [--expires-at <iso>] [--json]
+```
+
+除 `status` 外均要求 owner。takeover 只允许接管已过期 lease；active owner 不符时
+返回分类后的 owner/conflict 错误。
