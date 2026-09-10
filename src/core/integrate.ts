@@ -13,7 +13,7 @@ import { getWorkspaceById, updateWorkspaceStatus } from "../db/queries.js";
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
   updateWorkspaceHead,
 } from "../db/queries.js";
@@ -26,6 +26,7 @@ import {
   mergeOrConflict,
   resetHard,
   getChangedFiles,
+  generatePatch,
 } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 import {
@@ -33,6 +34,7 @@ import {
   releaseIntegrationLock,
 } from "./integration-lock.js";
 import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
+import { writeEvidenceArtifact } from "./evidence.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -65,8 +67,17 @@ export function integrateWorkspace(
     lockExpiresAt,
   } = input;
 
+  const canonicalInput = {
+    operationId,
+    sourceWorkspaceId,
+    targetWorkspaceId,
+    expectedHead: expectedHead ?? null,
+    lockOwner,
+    lockExpiresAt: lockExpiresAt ?? null,
+  };
+
   // Check idempotency
-  const inputHash = hashInput(input);
+  const inputHash = hashInput(canonicalInput);
   const idempotent = getIdempotencyRecord(db, operationId);
   if (idempotent) {
     if (idempotent.input_hash !== inputHash) {
@@ -155,7 +166,7 @@ export function integrateWorkspace(
 
   const ts = now();
 
-  // Record operation started
+  // Record operation started, reusing a journal row left by a failed attempt
   const journalRow: OperationJournalRow = {
     operation_id: operationId,
     workspace_id: targetWorkspaceId,
@@ -166,14 +177,25 @@ export function integrateWorkspace(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
-  // Acquire integration lock
-  acquireIntegrationLock(db, targetWorkspaceId, lockOwner, lockExpiresAt);
+  const originalStatus = targetRow.status;
 
   try {
-    // Transition target to MERGING
-    updateWorkspaceStatus(db, targetWorkspaceId, transition(targetRow.status as never, "MERGING"), now());
+    // Acquire integration lock
+    acquireIntegrationLock(db, targetWorkspaceId, lockOwner, lockExpiresAt);
+
+    // Transition target to MERGING. A completed previous integration leaves
+    // the target in MERGED; the flow protocol serializes integrations
+    // back-to-back with no advance step between them, so integrate resumes
+    // MERGED through RUNNING implicitly (mirroring the CONFLICT → MERGING
+    // retry-merge edge).
+    if (originalStatus === "MERGED") {
+      updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGED", "RUNNING"), now());
+      updateWorkspaceStatus(db, targetWorkspaceId, transition("RUNNING", "MERGING"), now());
+    } else {
+      updateWorkspaceStatus(db, targetWorkspaceId, transition(originalStatus as never, "MERGING"), now());
+    }
 
     const mergeResult = mergeOrConflict(
       targetRow.path,
@@ -181,52 +203,13 @@ export function integrateWorkspace(
       `zigma-integrate: merge ${sourceWorkspaceId} commit ${sourceCommit.slice(0, 8)}`,
     );
 
-    if (mergeResult.success) {
-      const resultingCommit = mergeResult.commit;
+    if (!mergeResult.success) {
+      // Conflict: mergeOrConflict already aborted the merge, restoring the
+      // target worktree to its pre-integration HEAD. The source workspace,
+      // commit, and snapshots are preserved untouched.
+      const conflictFiles = mergeResult.conflictFiles;
+      const message = `Merge conflict in ${conflictFiles.length} file(s): ${conflictFiles.join(", ")}`;
 
-      // Update target's base_commit
-      updateWorkspaceHead(db, targetWorkspaceId, resultingCommit, now());
-
-      // Transition to MERGED
-      updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGING", "MERGED"), now());
-
-      const result: IntegrateWorkspaceResult = {
-        operationId,
-        sourceWorkspaceId,
-        targetWorkspaceId,
-        sourceCommit,
-        previousTargetHead,
-        resultingCommit,
-        merged: true,
-      };
-
-      const resultJson = JSON.stringify(result);
-      updateOperationJournalStatus(db, operationId, targetWorkspaceId, "completed", resultJson, now());
-      insertIdempotencyRecord(db, {
-        operation_id: operationId,
-        command: "integrate",
-        input_hash: inputHash,
-        result_json: resultJson,
-        created_at: ts,
-      });
-
-      emitWorkspaceEvent(db, targetWorkspaceId, "workspace.bound", {
-        task_id: null,
-        flow_run_id: null,
-      });
-
-      return result;
-    }
-
-    // Unreachable — mergeOrConflict throws on failure
-    throw new ZigmaError("INTERNAL_ERROR", "Unexpected merge result", { operationId });
-  } catch (err) {
-    // On conflict, target is already restored (mergeOrConflict aborts merge)
-    const isGitError =
-      err instanceof Error && err.message.includes("Merge conflict");
-
-    if (isGitError) {
-      // Transition to CONFLICT
       updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGING", "CONFLICT"), now());
 
       const conflictResult: IntegrateConflictResult = {
@@ -234,8 +217,9 @@ export function integrateWorkspace(
         sourceWorkspaceId,
         targetWorkspaceId,
         sourceCommit,
-        conflictFiles: [],
-        message: err instanceof Error ? err.message : String(err),
+        previousTargetHead,
+        conflictFiles,
+        message,
       };
 
       const resultJson = JSON.stringify(conflictResult);
@@ -252,21 +236,89 @@ export function integrateWorkspace(
       return conflictResult;
     }
 
-    // Other errors: record failure and rethrow
+    const resultingCommit = mergeResult.commit;
+
+    // Build evidence before mutating the database: if the artifact write
+    // fails, the row must not claim a merge that was reset away.
+    const changedFiles = getChangedFiles(targetRow.path, previousTargetHead);
+    const patch = generatePatch(targetRow.path, previousTargetHead);
+    const artifact = writeEvidenceArtifact(
+      configForWorkspaceDatabase(db, targetRow.path),
+      targetWorkspaceId,
+      operationId,
+      patch,
+    );
+
+    // Update target's base_commit
+    updateWorkspaceHead(db, targetWorkspaceId, resultingCommit, now());
+
+    // Transition to MERGED
+    updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGING", "MERGED"), now());
+
+    const result: IntegrateWorkspaceResult = {
+      operationId,
+      sourceWorkspaceId,
+      targetWorkspaceId,
+      sourceCommit,
+      previousTargetHead,
+      resultingCommit,
+      changedFiles,
+      artifact,
+      merged: true,
+    };
+
+    const resultJson = JSON.stringify(result);
+    updateOperationJournalStatus(db, operationId, targetWorkspaceId, "completed", resultJson, now());
+    insertIdempotencyRecord(db, {
+      operation_id: operationId,
+      command: "integrate",
+      input_hash: inputHash,
+      result_json: resultJson,
+      created_at: ts,
+    });
+
+    emitWorkspaceEvent(db, targetWorkspaceId, "workspace.bound", {
+      task_id: null,
+      flow_run_id: null,
+    });
+
+    return result;
+  } catch (err) {
+    // Non-conflict errors: record failure, restore the target, and rethrow.
     const errorJson = JSON.stringify({
       error: err instanceof Error ? err.message : String(err),
       code: err instanceof ZigmaError ? err.code : "INTERNAL_ERROR",
     });
     updateOperationJournalStatus(db, operationId, targetWorkspaceId, "failed", errorJson, now());
 
-    // Try to restore target state
+    // Try to restore target state. If the target is still MERGING, walk it
+    // back to the pre-integration status so a retry (same or new operation
+    // id) is not blocked by an illegal MERGING → MERGING transition.
+    try {
+      const current = getWorkspaceById(db, targetWorkspaceId);
+      if (current?.status === "MERGING") {
+        updateWorkspaceStatus(
+          db,
+          targetWorkspaceId,
+          transition("MERGING", originalStatus as never),
+          now(),
+        );
+      }
+    } catch {
+      // Best effort
+    }
+
     try {
       resetHard(targetRow.path, previousTargetHead);
     } catch {
       // Best effort
     }
 
-    releaseIntegrationLock(db, targetWorkspaceId, lockOwner);
+    try {
+      releaseIntegrationLock(db, targetWorkspaceId, lockOwner);
+    } catch {
+      // Best effort
+    }
     throw err;
   }
 }
@@ -300,7 +352,7 @@ export function abortIntegration(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   const message = reason ?? "Integration aborted";
 

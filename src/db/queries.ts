@@ -442,6 +442,44 @@ export function updateOperationJournalStatus(
   ).run(status, resultJson, updatedAt, operationId, workspaceId);
 }
 
+/**
+ * Record an operation start, reusing a journal row left behind by a failed
+ * or crashed attempt instead of violating the (operation_id, workspace_id)
+ * primary key. A retry of the same operation id must be able to proceed.
+ */
+export function startOperationJournal(
+  db: Database.Database,
+  row: OperationJournalRow
+): void {
+  const existing = getOperationJournal(db, row.operation_id, row.workspace_id);
+  if (existing) {
+    updateOperationJournalStatus(
+      db,
+      row.operation_id,
+      row.workspace_id,
+      "started",
+      null,
+      row.updated_at
+    );
+    return;
+  }
+  insertOperationJournal(db, row);
+}
+
+/**
+ * Re-point a journal row at its real workspace after the workspace row is
+ * created (prepare operations journal with a placeholder workspace id).
+ */
+export function updateOperationJournalWorkspace(
+  db: Database.Database,
+  operationId: string,
+  workspaceId: string
+): void {
+  db.prepare(
+    `UPDATE operation_journal SET workspace_id = ? WHERE operation_id = ?`
+  ).run(workspaceId, operationId);
+}
+
 export function listOperationJournalForWorkspace(
   db: Database.Database,
   workspaceId: string

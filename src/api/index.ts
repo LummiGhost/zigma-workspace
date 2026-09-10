@@ -53,6 +53,15 @@ export { commitWorkspace } from "../core/commit.js";
 export { integrateWorkspace, abortIntegration } from "../core/integrate.js";
 export { publishWorkspace } from "../core/publish.js";
 export { reconcileWorkspace } from "../core/reconcile.js";
+export { prepareRun, prepareJob } from "../core/provider.js";
+
+// Flow-oriented aliases matching the zigma-flow WorkspaceProvider port.
+export {
+  integrateWorkspace as integrateJob,
+} from "../core/integrate.js";
+export {
+  publishWorkspace as publishRun,
+} from "../core/publish.js";
 export {
   acquireIntegrationLock,
   releaseIntegrationLock,
@@ -158,4 +167,17 @@ export type {
   OperationJournalRow,
   OperationCommand,
   OperationStatus,
+  ArtifactDescriptor,
+  PrepareRunInput,
+  RunWorkspaceHandle,
+  PrepareJobInput,
+  JobWorkspaceHandle,
+} from "../types/index.js";
+
+// Flow-oriented aliases matching the zigma-flow WorkspaceProvider port.
+export type {
+  IntegrateWorkspaceInput as IntegrateJobInput,
+  IntegrateWorkspaceResult as IntegrationResult,
+  PublishWorkspaceInput as PublishRunInput,
+  PublishWorkspaceResult as PublishResult,
 } from "../types/index.js";

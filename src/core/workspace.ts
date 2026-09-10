@@ -33,6 +33,7 @@ import {
   createWorktree,
   getDefaultBranch,
   configureWorktreeMode,
+  addWorktreeExclude,
 } from "../git/index.js";
 import {
   assertCapacityAvailable,
@@ -75,7 +76,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
  * Ensure a repository mirror exists and is up-to-date.
  * Returns the cache record.
  */
-function ensureRepositoryCache(
+export function ensureRepositoryCache(
   db: Database.Database,
   config: ZigmaWorkspaceConfig,
   repoUrl: string
@@ -211,6 +212,11 @@ export function createWorkspace(
 
   const manifestPath = path.join(workspacePath, ".zigma-workspace.json");
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+
+  // The manifest is always denied by path policy, so exclude it from git
+  // staging per worktree: commitWorkspace would otherwise reject every
+  // change set that includes the untracked manifest.
+  addWorktreeExclude(workspacePath, ".zigma-workspace.json");
 
   // Advance the lifecycle only after the worktree and manifest are ready.
   updateWorkspaceStatus(db, wsId, transition("CREATED", "PREPARING"), now());

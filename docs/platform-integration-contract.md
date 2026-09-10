@@ -9,7 +9,8 @@
 
 本文定义 `zigma-core`、`zigma-flow` 和宿主进程可以依赖的 Workspace
 能力边界。它覆盖 workspace 创建、绑定、查询、锁、心跳、差异、快照、
-对账和清理，并明确哪些能力已经是稳定 CLI 契约，哪些仍是 M3 前的
+对账、清理，以及 M3.3 稳定的 Run/Job attempt 生命周期（prepare、commit、
+integrate、publish），并明确哪些能力已经是稳定 CLI 契约，哪些仍是
 TypeScript API 能力。
 
 Workspace 拥有以下事实：
@@ -80,11 +81,17 @@ stdout 都恰好输出一个 JSON document，且不包含日志、进度或人�
 | cleanup | 稳定（基础及 `--strict`） | 稳定（基础及 strict） | strict 模式验证目录和 registration，且要求 operation id |
 | reconcile | 稳定 | 稳定 | 对账 registry、目录、HEAD、manifest 和 operation journal |
 | integration lock | 稳定 | 稳定 | 独占、owner 校验、过期接管和心跳 |
-| commit/integrate/publish | 未暴露 | 可用 | operation-id、CAS 和结构化冲突结果 |
+| prepare-run | 稳定 | 稳定 | 创建或采用 `flow/<runId>` Run workspace；operation-id 幂等；`expected_base` CAS；崩溃重试采用既有 workspace |
+| prepare-job | 稳定 | 稳定 | 从精确 `expected_run_head` 创建或采用 `job/<runId>/<jobId>/a<attempt>` attempt workspace；校验 Run 归属和 HEAD 血缘 |
+| commit | 稳定 | 稳定 | operation-id 幂等；`expected_state`/`expected_head` CAS；结果携带 evidence artifact descriptor |
+| integrate | 稳定 | 稳定 | 串行集成进 Run workspace；integration lock；`expected_head` CAS；结构化冲突证据；冲突恢复 prior Run HEAD |
+| publish | 稳定 | 稳定 | `none`/`branch` 策略；`expected_head` CAS；结果携带 base/head/resulting commit、changed files 和 artifact |
 
-“可用”表示当前实现和 provider tests 已存在，但在 M3 完成前不能被远程
-编排器当作稳定 CLI 协议。M3 的目标不是重新定义这些语义，而是把必要能力
-暴露为版本化 CLI/API，补齐跨进程契约测试和取消恢复闭环。
+Run workspace 分支为 `flow/<runId>`；Job attempt 分支为
+`job/<runId>/<jobId>/a<attempt>`。attempt 分支使用同级的 `job/` 命名空间，
+因为 Git 禁止同名的 branch 和 branch-directory 并存
+（`refs/heads/flow/<runId>` 与 `refs/heads/flow/<runId>/<jobId>/a<attempt>`
+不能同时存在）。
 
 ### 3.1 Provider handshake
 
@@ -112,7 +119,13 @@ snake_case 命名：
     "workspace-heartbeat-v1",
     "workspace-reconcile-v1",
     "workspace-integration-lock-v1",
-    "workspace-strict-cleanup-v1"
+    "workspace-strict-cleanup-v1",
+    "workspace-isolation-policy-v1",
+    "workspace-prepare-run-v1",
+    "workspace-prepare-job-v1",
+    "workspace-commit-v1",
+    "workspace-integrate-v1",
+    "workspace-publish-v1"
   ]
 }
 ```
@@ -121,6 +134,47 @@ snake_case 命名：
 能力名视为稳定标识：未知主契约版本或缺少所需 capability 时，必须在 create、
 bind-run、diff、snapshot、cleanup 之前 fail closed。新增 V1 可选能力不应使旧
 调用方失败。
+
+### 3.2 Run/Job attempt 生命周期（M3.3）
+
+Flow 按以下顺序消费 provider 操作：
+
+1. `prepare-run`（operation id `run:<runId>:create`）创建或采用 Run
+   workspace，分支 `flow/<runId>`，状态推进到 `RUNNING`。`--expected-base`
+   提供创建前 CAS；重试相同 operation id 回放首次结果，崩溃重试采用已拥有
+   该分支的 workspace。采用（adopt）已存在的 workspace 时，`expected_base`
+   与 manifest 的创建基线 commit 做大小写不敏感比较（manifest 不可读时回退
+   到 registry 记录的 `base_commit`），不一致抛 `WORKSPACE_HEAD_CONFLICT`。
+2. `prepare-job`（operation id `run:<runId>:job:<jobId>:attempt:<n>:create`）
+   从精确的 `expected_run_head`（完整 40 位 SHA，且必须是当前 Run HEAD 的
+   祖先）创建 attempt workspace。attempt 分支属于同级的 `job/` 命名空间；
+   同一 attempt 的 workspace 被复用时校验其 `base_commit` 与
+   `expected_run_head` 一致。所有 SHA 比较大小写不敏感。
+   创建 workspace 时 manifest 文件 `.zigma-workspace.json` 自动写入该仓库
+   `info/exclude`（通过 `git rev-parse --git-path info/exclude` 定位，linked
+   worktree 读取的是 common dir 下的文件），因此它不会出现在 `git status`、
+   diff、commit 或 evidence 中。
+3. Job 完成后 `commit` 提交全部变更；结果携带 `head_commit`、
+   `changed_files` 和 evidence artifact descriptor。
+4. `integrate` 把 Job commit 串行合并进 Run workspace：先获取 target 的
+   integration lock，再以 `expected_head` CAS 三方合并。成功的 integrate
+   会把 target 留在 `MERGED`；下一次 integrate 隐式经过
+   `MERGED → RUNNING` 恢复串行周期，调用方不需要额外的推进步骤。
+5. 合并冲突时 provider abort 合并、把 Run workspace 恢复到集成前 HEAD，并
+   返回结构化 `WORKSPACE_INTEGRATION_CONFLICT`（details 携带
+   `source_commit`、`previous_target_head` 和 `conflict_files`）。Job
+   workspace、commit 和 snapshot 全部保留。相同 operation id 重放同一冲突
+   envelope，不重复产生副作用。
+6. 全部集成完成后 `publish` 按 `none`（只记录 evidence）或 `branch`
+   （推送目标 ref）策略交付，`expected_head` CAS 保护，结果携带
+   `resulting_ref`、`resulting_commit`、`changed_files` 和 evidence
+   artifact。`branch` 策略的 target ref 必须是裸分支名：拒绝 `refs/` 前缀
+   并通过 `git check-ref-format refs/heads/<target>` 校验，防止逃逸到
+   `refs/tags/*` 等命名空间。push 崩溃重试时（ref 已指向目标 commit），
+   evidence 以目标 ref 之前的位置（或 manifest 创建基线）为基准计算。
+
+`commit`/`integrate`/`publish` 与 `prepare-run`/`prepare-job` 同样要求
+operation id 和规范化输入；输入哈希变化触发 `OPERATION_ID_CONFLICT`。
 
 ## 4. 标识、路径和产物
 
@@ -181,6 +235,11 @@ metadata descriptor and adds one patch descriptor only when tracked changes
 exist. `digest` hashes the exact UTF-8 bytes written to the referenced file;
 consumers must verify it before use.
 
+`commit`、`integrate` 和 `publish` 结果中的 evidence `artifact` 字段遵循同一
+descriptor schema（`uri`、`media_type: "text/x-diff"`、`digest: sha256:<hex>`），
+CLI JSON 使用 snake_case `media_type`，TypeScript API 使用 camelCase
+`mediaType`。没有 evidence 内容（如 no-op commit）时为 `null`。
+
 `file:` URI 只在同一宿主有效。跨宿主系统必须上传到持久化 artifact store，
 替换为该 store 的 URI，并保留 `media_type` 和 digest。消费者在使用前验证
 digest；路径存在不等于产物完整。
@@ -209,12 +268,18 @@ CLEANUP_FAILED --------------------------------------> CLEANED or FAILED
 3. `diff` 和 `snapshot` 是读取操作，不改变写入所有权。
 4. `cleanup` 只有在目录和 Git registration 均确认移除后才能进入 `CLEANED`。
 5. `CLEANED` 是终态；同一 workspace id 不可重新激活。
+6. `integrate` 成功后 target 处于 `MERGED`；下一次 `integrate` 隐式经过
+   `MERGED → RUNNING` 恢复串行周期。`CONFLICT → MERGING` 同样合法，用于
+   冲突解决后的 retry-merge。`MERGING → RUNNING` 是非冲突失败（如锁冲突、
+   evidence 写入失败）后的恢复边：integrate 失败时把 target 恢复为集成前
+   状态并 `reset --hard` 到原 HEAD，相同或新 operation id 均可重试；`abort`
+   也允许 `MERGING`/`CONFLICT → RUNNING`。
 
 ## 6. 幂等和并发
 
 `create`、`bind-run`、`snapshot` 和基础 `cleanup` 的 CLI 支持
-`--operation-id`；commit、integrate、publish 和 strict cleanup API 也要求
-operation id。
+`--operation-id`；prepare-run、prepare-job、commit、integrate、publish 和
+strict cleanup 都要求 operation id 和规范化输入。
 
 | 情形 | 结果 |
 | --- | --- |
@@ -339,13 +404,17 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
   重试和并发边界。
 - `tests/core/workspace-dogfood.test.ts`：worktree 隔离、manifest 过滤、多读单写、
   snapshot 和 cleanup 的真实 Git 流程。
+- `tests/core/run-job-lifecycle.test.ts`：prepareRun/prepareJob 幂等与采用、
+  commit/integrate/publish CAS 串行化、同线冲突恢复和 evidence artifact、
+  并发 Run/Job 压力；真实临时 Git repository。
 - `tests/cli/json-contract.test.ts`：真实 CLI stdout envelope、artifact、operation-id、
-  heartbeat、reconcile、integration lock 和 strict cleanup 黑盒契约。
+  heartbeat、reconcile、integration lock、strict cleanup，以及
+  prepare/commit/integrate/publish 完整生命周期和冲突 envelope 黑盒契约。
 
-M3 前仍需关闭的契约缺口：
+仍需关闭的契约缺口：
 
-1. 为 Core adapter 建立针对真实 CLI JSON 的 consumer
-   黑盒契约测试。
+1. 为 Core adapter 建立独立 consumer 进程的
+   黑盒契约测试（当前 CLI 生命周期测试仍运行在同一仓库的测试进程内）。
 2. 统一 README、CLI 和 API 的状态名，淘汰旧的小写展示语义。
 3. 对 workspace root、junction/symlink 和 Windows 大小写路径增加逃逸测试。
 4. 增加取消后“子进程退出 -> 句柄释放 -> reconcile -> strict cleanup”的长时

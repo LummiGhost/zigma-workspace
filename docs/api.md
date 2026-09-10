@@ -309,6 +309,80 @@ type WorkspaceStatus =
 
 ID 由 UUID v4 加前缀构成：`ws_`、`cache_`、`lock_`、`snap_`、`evt_`、`ilock_`。时间字段使用 `new Date().toISOString()` 生成的 UTC ISO 8601 字符串。
 
+## Provider API（Run/Job attempt 生命周期）
+
+模块：`src/core/provider.ts`。配合别名 `integrateJob`（`integrateWorkspace`）
+和 `publishRun`（`publishWorkspace`）构成 Flow 的 WorkspaceProvider 端口。
+
+### `prepareRun(db, config, input): RunWorkspaceHandle`
+
+```ts
+interface PrepareRunInput {
+  operationId: string;
+  runId: string;
+  repositoryUrl: string;
+  baseRef: string;
+  mode?: "read-only" | "writable";
+  expectedBaseCommit?: string;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+}
+
+interface RunWorkspaceHandle {
+  operationId: string;
+  runId: string;
+  workspaceId: string;
+  path: string;
+  branch: string; // flow/<runId>
+  baseRef: string;
+  baseCommit: string;
+  mode: "read-only" | "writable";
+  status: WorkspaceState;
+  createdAt: string;
+}
+```
+
+创建（或采用）分支 `flow/<runId>` 的 Run workspace 并绑定 flow run。相同
+operation id 回放首次结果；崩溃后重试采用已拥有该分支的 workspace。
+`expectedBaseCommit` 与 `baseRef` 解析结果不一致时抛出
+`WORKSPACE_HEAD_CONFLICT`，且不留下部分状态。
+
+### `prepareJob(db, config, input): JobWorkspaceHandle`
+
+```ts
+interface PrepareJobInput {
+  operationId: string;
+  runId: string;
+  runWorkspaceId: string;
+  jobId: string;
+  attempt: number;
+  expectedRunHead: string; // 完整 40 位 SHA，必须是 Run HEAD 的祖先
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+}
+
+interface JobWorkspaceHandle {
+  operationId: string;
+  runId: string;
+  runWorkspaceId: string;
+  jobId: string;
+  attempt: number;
+  workspaceId: string;
+  path: string;
+  branch: string; // job/<runId>/<jobId>/a<attempt>
+  baseCommit: string;
+  mode: "read-only" | "writable";
+  status: WorkspaceState;
+  createdAt: string;
+}
+```
+
+从精确的 `expectedRunHead` 创建 attempt workspace。attempt 分支使用同级的
+`job/` 命名空间：Git 禁止 `refs/heads/flow/<runId>` 与其目录下的分支
+（`refs/heads/flow/<runId>/<jobId>/a<attempt>`）同时存在。`runWorkspaceId`
+不属于该 `runId` 时抛出 `INVALID_INPUT`；`expectedRunHead` 不在 Run 历史中
+或不存在于 repository 时抛出 `WORKSPACE_HEAD_CONFLICT`。
+
 ## Commit API
 
 模块：`src/core/commit.ts`
@@ -331,11 +405,12 @@ interface CommitWorkspaceResult {
   headCommit: string;
   changedFiles: string[];
   evidenceDigest: string;
+  artifact?: ArtifactDescriptor;
   noOp: boolean;
 }
 ```
 
-使用 `git add --all` 捕获所有变更（tracked、untracked、rename、delete、binary），然后创建 commit。无变更时返回 no-op。相同 operation ID + 相同输入返回首次结果（幂等）；不同输入返回 `OPERATION_ID_CONFLICT` 错误。expectedState/expectedHead 不匹配时分别抛出 `WORKSPACE_STATE_CONFLICT` 或 `WORKSPACE_HEAD_CONFLICT`。
+使用 `git add --all` 捕获所有变更（tracked、untracked、rename、delete、binary），然后创建 commit。无变更时返回 no-op。相同 operation ID + 相同输入返回首次结果（幂等）；不同输入返回 `OPERATION_ID_CONFLICT` 错误。expectedState/expectedHead 不匹配时分别抛出 `WORKSPACE_STATE_CONFLICT` 或 `WORKSPACE_HEAD_CONFLICT`。有变更时 `artifact` 携带 patch evidence descriptor（`uri`、`mediaType: "text/x-diff"`、`digest: sha256:<hex>`）。
 
 ## Integrate API
 
@@ -360,6 +435,8 @@ interface IntegrateWorkspaceResult {
   sourceCommit: string;
   previousTargetHead: string;
   resultingCommit: string;
+  changedFiles: string[];
+  artifact?: ArtifactDescriptor;
   merged: boolean;
 }
 
@@ -368,12 +445,13 @@ interface IntegrateConflictResult {
   sourceWorkspaceId: string;
   targetWorkspaceId: string;
   sourceCommit: string;
+  previousTargetHead: string;
   conflictFiles: string[];
   message: string;
 }
 ```
 
-将 source Job commit 合并到 target Run workspace。先获取 integration lock，再用 `--no-ff` 合并。冲突时自动 abort merge 恢复 target 干净状态，返回结构化冲突信息。source commit 已是 target 的祖先时返回 `merged: false`（已合并）。重复调用不产生重复 merge commit。
+将 source Job commit 合并到 target Run workspace。先获取 integration lock，再用 `--no-ff` 合并。冲突时自动 abort merge 恢复 target 干净状态，返回结构化冲突信息；Job workspace、commit 和 snapshot 全部保留。source commit 已是 target 的祖先时返回 `merged: false`（已合并）。重复调用不产生重复 merge commit。target 处于 `MERGED`（上次集成完成）时隐式经过 `MERGED → RUNNING` 恢复串行周期，调用方无需额外推进步骤。
 
 ### `abortIntegration(db, input): AbortIntegrationResult`
 
@@ -401,7 +479,7 @@ interface AbortIntegrationResult {
 ### `publishWorkspace(db, input): PublishWorkspaceResult`
 
 ```ts
-type PublishStrategy = "branch" | "merge" | "fast-forward";
+type PublishStrategy = "none" | "branch" | "merge" | "fast-forward";
 
 interface PublishWorkspaceInput {
   operationId: string;
@@ -415,13 +493,19 @@ interface PublishWorkspaceResult {
   operationId: string;
   workspaceId: string;
   strategy: PublishStrategy;
-  resultingRef: string;
+  resultingRef: string | null; // null for strategy "none"
   resultingCommit: string;
   previousRef?: string;
+  changedFiles: string[];
+  artifact?: ArtifactDescriptor;
 }
 ```
 
-将 workspace 变更发布到目标 ref。首版支持 `branch` 策略（push 到远程分支）。dirty working tree 上拒绝操作。expectedHead 不匹配时抛出 `WORKSPACE_HEAD_CONFLICT`。`merge` 和 `fast-forward` 策略暂未实现。
+将 workspace 变更发布到目标 ref。`none` 不更新 ref、只记录 evidence；
+`branch` push 到远程分支。evidence 从上次 target ref（或 workspace 的创建
+base commit，manifest 中保留）计算。dirty working tree 上拒绝操作。
+expectedHead 不匹配时抛出 `WORKSPACE_HEAD_CONFLICT`。`merge` 和
+`fast-forward` 策略暂未实现。
 
 ## Reconcile API
 

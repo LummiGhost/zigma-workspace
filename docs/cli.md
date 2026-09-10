@@ -86,7 +86,13 @@ zigma-workspace contract-info --json
     "workspace-heartbeat-v1",
     "workspace-reconcile-v1",
     "workspace-integration-lock-v1",
-    "workspace-strict-cleanup-v1"
+    "workspace-strict-cleanup-v1",
+    "workspace-isolation-policy-v1",
+    "workspace-prepare-run-v1",
+    "workspace-prepare-job-v1",
+    "workspace-commit-v1",
+    "workspace-integrate-v1",
+    "workspace-publish-v1"
   ]
 }
 ```
@@ -105,6 +111,7 @@ zigma-workspace contract-info --json
 | `GIT_ERROR` | Git 命令执行失败 |
 | `INVALID_INPUT` | 参数值非法（如 `--mode` 值、`--state-dir` 非绝对路径） |
 | `OPERATION_ID_CONFLICT` | `--operation-id` 已被不同输入占用 |
+| `WORKSPACE_INTEGRATION_CONFLICT` | 集成合并冲突；details 携带 source/previous head/conflict files，可幂等重放 |
 | `INTERNAL_ERROR` | 未预期的内部错误 |
 
 ## 幂等操作（`--operation-id`）
@@ -331,3 +338,62 @@ zigma-workspace integration-lock --workspace <id> --action <acquire|heartbeat|re
 
 除 `status` 外均要求 owner。takeover 只允许接管已过期 lease；active owner 不符时
 返回分类后的 owner/conflict 错误。
+
+## Run/Job attempt 生命周期（M3.3）
+
+这些命令实现 Flow 的两级 workspace 协议，全部要求 `--operation-id`。
+
+### `prepare-run`
+
+```text
+zigma-workspace prepare-run --operation-id <id> --run <runId> --repo <url> --base <ref> [--mode <writable|read-only>] [--expected-base <sha>] [--json]
+```
+
+创建（或采用）分支 `flow/<runId>` 的 Run workspace 并绑定 flow run。data 字段：
+`operation_id`、`run_id`、`workspace_id`、`path`、`branch`、`base_ref`、
+`base_commit`、`mode`、`status`、`created_at`。`--expected-base` 提供创建前
+CAS；相同 operation id 重试回放首次结果，崩溃重试采用既有 workspace。
+
+### `prepare-job`
+
+```text
+zigma-workspace prepare-job --operation-id <id> --run <runId> --run-workspace <id> --job <jobId> --attempt <n> --expected-head <sha> [--json]
+```
+
+从精确的 `--expected-head`（完整 40 位 SHA，必须是 Run HEAD 的祖先）创建
+attempt workspace。attempt 分支为 `job/<runId>/<jobId>/a<attempt>`：与 Run
+分支 `flow/<runId>` 使用同级命名空间，因为 Git 禁止同名 branch 与
+branch-directory 并存。
+
+### `commit`
+
+```text
+zigma-workspace commit --operation-id <id> --workspace <id> [--message <msg>] [--expected-state <state>] [--expected-head <sha>] [--json]
+```
+
+提交 workspace 的全部变更。data 字段：`base_commit`、`head_commit`、
+`changed_files`、`evidence_digest`、`artifact`（evidence descriptor 或 null）、
+`no_op`。
+
+### `integrate`
+
+```text
+zigma-workspace integrate --operation-id <id> --source <id> --target <id> --lock-owner <owner> [--expected-head <sha>] [--lock-expires-at <iso>] [--json]
+```
+
+把 source Job commit 合并进 target Run workspace。`--expected-head` 是 target
+HEAD 的 CAS。成功时 target 留在 `MERGED`；下一次 integrate 隐式恢复串行周期，
+不需要额外推进步骤。冲突时返回 `ok: false`、code
+`WORKSPACE_INTEGRATION_CONFLICT`，details 携带 `source_commit`、
+`previous_target_head` 和 `conflict_files`；Run workspace 恢复到集成前 HEAD，
+Job workspace、commit 和 snapshot 保留。相同 operation id 重放同一 envelope。
+
+### `publish`
+
+```text
+zigma-workspace publish --operation-id <id> --workspace <id> --strategy <none|branch> --target-ref <ref> [--expected-head <sha>] [--json]
+```
+
+`none` 不更新 ref、只记录 evidence；`branch` push 到目标 ref。data 字段：
+`resulting_ref`（`none` 时为 null）、`resulting_commit`、`previous_ref`、
+`changed_files`、`artifact`。

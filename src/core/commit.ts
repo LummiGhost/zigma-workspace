@@ -11,7 +11,7 @@ import { getWorkspaceById } from "../db/queries.js";
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "./events.js";
@@ -22,8 +22,10 @@ import {
   getCommitFiles,
   getFullStatus,
   getStatusFiles,
+  generatePatch,
 } from "../git/index.js";
 import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
+import { writeEvidenceArtifact } from "./evidence.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -49,8 +51,18 @@ export function commitWorkspace(
 ): CommitWorkspaceResult {
   const { operationId, workspaceId, message, expectedState, expectedHead } = input;
 
+  // Canonical input: only the defined fields participate in the idempotency
+  // hash so extra runtime fields cannot change the operation identity.
+  const canonicalInput = {
+    operationId,
+    workspaceId,
+    message: message ?? null,
+    expectedState: expectedState ?? null,
+    expectedHead: expectedHead ?? null,
+  };
+
   // Check idempotency
-  const inputHash = hashInput(input);
+  const inputHash = hashInput(canonicalInput);
   const idempotent = getIdempotencyRecord(db, operationId);
   if (idempotent) {
     if (idempotent.input_hash !== inputHash) {
@@ -116,7 +128,7 @@ export function commitWorkspace(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   try {
     const baseCommit = row.base_commit;
@@ -170,6 +182,11 @@ export function commitWorkspace(
     });
     const evidenceDigest = crypto.createHash("sha256").update(evidenceContent, "utf-8").digest("hex");
 
+    // Write the commit evidence patch (baseCommit..headCommit) as a
+    // portable artifact.
+    const patch = generatePatch(row.path, baseCommit);
+    const artifact = writeEvidenceArtifact(config, workspaceId, operationId, patch);
+
     const result: CommitWorkspaceResult = {
       operationId,
       workspaceId,
@@ -177,6 +194,7 @@ export function commitWorkspace(
       headCommit,
       changedFiles,
       evidenceDigest,
+      artifact,
       noOp: false,
     };
 
