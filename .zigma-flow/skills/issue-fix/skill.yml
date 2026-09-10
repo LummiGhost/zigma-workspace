@@ -1,0 +1,21 @@
+id: zigma-flow.issue-fix
+kind: skill-pack
+name: zigma-flow.issue-fix
+version: 1.0.0
+description: >
+  Zigma Flow issue fix skill pack.
+  Provides prompts for the issue-fix workflow: parse task string, fetch GitHub issue
+  context, implement a targeted fix, run quality gates with autofix, and submit a PR.
+  Supports two review modes: hotfix (default) and fully-fix.
+
+prompts:
+  - id: issue-context
+    path: prompts/issue-context.md
+  - id: fix
+    path: prompts/fix.md
+  - id: gate-autofix
+    path: prompts/gate-autofix.md
+  - id: review
+    path: prompts/review.md
+  - id: submit-pr
+    path: prompts/submit-pr.md
