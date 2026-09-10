@@ -21,6 +21,10 @@ import { createSnapshot } from "../core/snapshot.js";
 import { getArtifactsForSnapshot } from "../core/artifact.js";
 import { cleanupWorkspace, cleanupWorkspaceStrict } from "../core/cleanup.js";
 import { reconcileWorkspace } from "../core/reconcile.js";
+import { prepareRun, prepareJob } from "../core/provider.js";
+import { commitWorkspace } from "../core/commit.js";
+import { integrateWorkspace } from "../core/integrate.js";
+import { publishWorkspace } from "../core/publish.js";
 import {
   acquireIntegrationLock,
   getIntegrationLockState,
@@ -54,6 +58,11 @@ const WORKSPACE_CAPABILITIES = [
   "workspace-integration-lock-v1",
   "workspace-strict-cleanup-v1",
   "workspace-isolation-policy-v1",
+  "workspace-prepare-run-v1",
+  "workspace-prepare-job-v1",
+  "workspace-commit-v1",
+  "workspace-integrate-v1",
+  "workspace-publish-v1",
 ] as const;
 
 // ── Output helpers ──────────────────────────────────────────────────────────
@@ -108,6 +117,12 @@ function formatHuman(data: unknown): string {
   if (data === null || data === undefined) return "(empty)";
   if (typeof data === "string") return data;
   return JSON.stringify(data, null, 2);
+}
+
+/** CLI JSON is snake_case even though the TypeScript API returns camelCase. */
+function formatArtifactDescriptor(artifact: { uri: string; mediaType: string; digest: string } | undefined | null): Record<string, string> | null {
+  if (!artifact) return null;
+  return { uri: artifact.uri, media_type: artifact.mediaType, digest: artifact.digest };
 }
 
 function formatWorkspace(ws: Workspace): string {
@@ -1216,6 +1231,294 @@ program
       catchError(err, useJson);
     }
   });
+
+// ── prepare-run ────────────────────────────────────────────────────────────
+
+program
+  .command("prepare-run")
+  .description("Prepare (or adopt) the Run workspace for a flow run")
+  .requiredOption("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .requiredOption("--run <runId>", "Flow run ID; the workspace branch will be flow/<runId>")
+  .requiredOption("--repo <url>", "Repository URL to clone")
+  .requiredOption("--base <ref>", "Base git ref (branch, tag, or commit)")
+  .option("--mode <mode>", "Workspace mode: writable or read-only", "writable")
+  .option("--expected-base <sha>", "CAS: fail unless the base ref resolves to this commit")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: {
+      operationId: string;
+      run: string;
+      repo: string;
+      base: string;
+      mode: string;
+      expectedBase?: string;
+      json?: boolean;
+    }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        if (opts.mode !== "writable" && opts.mode !== "read-only") {
+          outputError("INVALID_INPUT", `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`, useJson);
+        }
+        const { config, db } = setup(globalOpts.stateDir);
+        const handle = prepareRun(db, config, {
+          operationId: opts.operationId,
+          runId: opts.run,
+          repositoryUrl: opts.repo,
+          baseRef: opts.base,
+          mode: opts.mode as "writable" | "read-only",
+          expectedBaseCommit: opts.expectedBase,
+        });
+        outputOk(
+          {
+            operation_id: handle.operationId,
+            run_id: handle.runId,
+            workspace_id: handle.workspaceId,
+            path: handle.path,
+            branch: handle.branch,
+            base_ref: handle.baseRef,
+            base_commit: handle.baseCommit,
+            mode: handle.mode,
+            status: handle.status,
+            created_at: handle.createdAt,
+          },
+          useJson
+        );
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── prepare-job ─────────────────────────────────────────────────────────────
+
+program
+  .command("prepare-job")
+  .description("Prepare (or adopt) a Job attempt workspace from an exact Run HEAD")
+  .requiredOption("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .requiredOption("--run <runId>", "Flow run ID")
+  .requiredOption("--run-workspace <id>", "Run workspace ID the attempt branches from")
+  .requiredOption("--job <jobId>", "Job ID")
+  .requiredOption("--attempt <n>", "Attempt number (positive integer)")
+  .requiredOption("--expected-head <sha>", "Exact Run HEAD commit the attempt starts from")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: {
+      operationId: string;
+      run: string;
+      runWorkspace: string;
+      job: string;
+      attempt: string;
+      expectedHead: string;
+      json?: boolean;
+    }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const attempt = Number.parseInt(opts.attempt, 10);
+        if (!Number.isInteger(attempt) || String(attempt) !== opts.attempt || attempt < 1) {
+          outputError("INVALID_INPUT", `Invalid attempt "${opts.attempt}". Must be a positive integer`, useJson);
+        }
+        const { config, db } = setup(globalOpts.stateDir);
+        const handle = prepareJob(db, config, {
+          operationId: opts.operationId,
+          runId: opts.run,
+          runWorkspaceId: opts.runWorkspace,
+          jobId: opts.job,
+          attempt,
+          expectedRunHead: opts.expectedHead,
+        });
+        outputOk(
+          {
+            operation_id: handle.operationId,
+            run_id: handle.runId,
+            run_workspace_id: handle.runWorkspaceId,
+            job_id: handle.jobId,
+            attempt: handle.attempt,
+            workspace_id: handle.workspaceId,
+            path: handle.path,
+            branch: handle.branch,
+            base_commit: handle.baseCommit,
+            mode: handle.mode,
+            status: handle.status,
+            created_at: handle.createdAt,
+          },
+          useJson
+        );
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── commit ──────────────────────────────────────────────────────────────────
+
+program
+  .command("commit")
+  .description("Commit all workspace changes with CAS and idempotency")
+  .requiredOption("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .requiredOption("--workspace <id>", "Workspace ID")
+  .option("--message <msg>", "Commit message")
+  .option("--expected-state <state>", "CAS: fail unless the workspace is in this state")
+  .option("--expected-head <sha>", "CAS: fail unless workspace HEAD is this commit")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: {
+      operationId: string;
+      workspace: string;
+      message?: string;
+      expectedState?: string;
+      expectedHead?: string;
+      json?: boolean;
+    }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+        const result = commitWorkspace(db, {
+          operationId: opts.operationId,
+          workspaceId: opts.workspace,
+          message: opts.message,
+          expectedState: opts.expectedState,
+          expectedHead: opts.expectedHead,
+        });
+        outputOk(
+          {
+            operation_id: result.operationId,
+            workspace_id: result.workspaceId,
+            base_commit: result.baseCommit,
+            head_commit: result.headCommit,
+            changed_files: result.changedFiles,
+            evidence_digest: result.evidenceDigest,
+            artifact: formatArtifactDescriptor(result.artifact),
+            no_op: result.noOp,
+          },
+          useJson
+        );
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── integrate ───────────────────────────────────────────────────────────────
+
+program
+  .command("integrate")
+  .description("Integrate a source Job workspace commit into a target Run workspace")
+  .requiredOption("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .requiredOption("--source <id>", "Source (Job) workspace ID")
+  .requiredOption("--target <id>", "Target (Run) workspace ID")
+  .requiredOption("--lock-owner <owner>", "Integration lock owner identifier")
+  .option("--expected-head <sha>", "CAS: fail unless target HEAD is this commit")
+  .option("--lock-expires-at <iso>", "Integration lock lease expiry (ISO timestamp)")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: {
+      operationId: string;
+      source: string;
+      target: string;
+      lockOwner: string;
+      expectedHead?: string;
+      lockExpiresAt?: string;
+      json?: boolean;
+    }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        const { db } = setup(globalOpts.stateDir);
+        const result = integrateWorkspace(db, {
+          operationId: opts.operationId,
+          sourceWorkspaceId: opts.source,
+          targetWorkspaceId: opts.target,
+          expectedHead: opts.expectedHead,
+          lockOwner: opts.lockOwner,
+          lockExpiresAt: opts.lockExpiresAt,
+        });
+
+        if ("conflictFiles" in result) {
+          outputError("WORKSPACE_INTEGRATION_CONFLICT", result.message, useJson, {
+            operation_id: result.operationId,
+            source_workspace_id: result.sourceWorkspaceId,
+            target_workspace_id: result.targetWorkspaceId,
+            source_commit: result.sourceCommit,
+            previous_target_head: result.previousTargetHead,
+            conflict_files: result.conflictFiles,
+          });
+        }
+
+        outputOk(
+          {
+            operation_id: result.operationId,
+            source_workspace_id: result.sourceWorkspaceId,
+            target_workspace_id: result.targetWorkspaceId,
+            source_commit: result.sourceCommit,
+            previous_target_head: result.previousTargetHead,
+            resulting_commit: result.resultingCommit,
+            changed_files: result.changedFiles ?? [],
+            artifact: formatArtifactDescriptor(result.artifact),
+            merged: result.merged,
+          },
+          useJson
+        );
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
+
+// ── publish ─────────────────────────────────────────────────────────────────
+
+program
+  .command("publish")
+  .description("Publish workspace changes to a target ref")
+  .requiredOption("--operation-id <id>", "Idempotency key: repeat with same inputs to get original result")
+  .requiredOption("--workspace <id>", "Workspace ID")
+  .requiredOption("--strategy <strategy>", "Publish strategy: none or branch")
+  .requiredOption("--target-ref <ref>", "Target ref name (ignored by strategy none)")
+  .option("--expected-head <sha>", "CAS: fail unless workspace HEAD is this commit")
+  .option("--json", "Output JSON")
+  .action(
+    async (opts: {
+      operationId: string;
+      workspace: string;
+      strategy: string;
+      targetRef: string;
+      expectedHead?: string;
+      json?: boolean;
+    }) => {
+      const useJson = opts.json ?? false;
+      const globalOpts = program.opts<{ stateDir?: string }>();
+      try {
+        if (opts.strategy !== "none" && opts.strategy !== "branch") {
+          outputError("INVALID_INPUT", `Invalid publish strategy "${opts.strategy}". Supported: none, branch`, useJson);
+        }
+        const { db } = setup(globalOpts.stateDir);
+        const result = publishWorkspace(db, {
+          operationId: opts.operationId,
+          workspaceId: opts.workspace,
+          strategy: opts.strategy as "none" | "branch",
+          targetRef: opts.targetRef,
+          expectedHead: opts.expectedHead,
+        });
+        outputOk(
+          {
+            operation_id: result.operationId,
+            workspace_id: result.workspaceId,
+            strategy: result.strategy,
+            resulting_ref: result.resultingRef,
+            resulting_commit: result.resultingCommit,
+            previous_ref: result.previousRef ?? null,
+            changed_files: result.changedFiles ?? [],
+            artifact: formatArtifactDescriptor(result.artifact),
+          },
+          useJson
+        );
+      } catch (err) {
+        catchError(err, useJson);
+      }
+    }
+  );
 
 // ── Run ───────────────────────────────────────────────────────────────────────
 
