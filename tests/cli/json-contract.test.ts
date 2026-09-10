@@ -59,6 +59,11 @@ function assertV1Envelope(envelope: JsonEnvelope, ok: boolean): void {
   expect(envelope.ok).toBe(ok);
 }
 
+/** Keep the untracked workspace manifest out of the job commit's change set. */
+function gitignoreManifest(workspacePath: string): void {
+  fs.appendFileSync(path.join(workspacePath, ".gitignore"), ".zigma-workspace.json\n", "utf-8");
+}
+
 function canonicalHash(value: Record<string, unknown>): string {
   const sorted = Object.keys(value).sort().reduce<Record<string, unknown>>((result, key) => {
     result[key] = value[key];
@@ -104,6 +109,11 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
         "workspace-integration-lock-v1",
         "workspace-strict-cleanup-v1",
         "workspace-isolation-policy-v1",
+        "workspace-prepare-run-v1",
+        "workspace-prepare-job-v1",
+        "workspace-commit-v1",
+        "workspace-integrate-v1",
+        "workspace-publish-v1",
       ],
     });
     expect(fs.existsSync(stateDir)).toBe(false);
@@ -376,4 +386,225 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     expect(parseSingleEnvelope(rejected.stdout).error).toMatchObject({ code: "WORKSPACE_CAPACITY_EXCEEDED" });
     expect(fs.readdirSync(path.join(exhaustedState, "workspaces"))).toEqual([]);
   }, 30_000);
+
+  it("runs the Run + Job-attempt lifecycle through prepare/commit/integrate/publish commands", () => {
+    const { repo, stateDir } = makeRepo();
+    const baseCommit = git(repo, "rev-parse", "main");
+
+    const run = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-run", "--operation-id", "cli-life-run", "--run", "cli-life",
+      "--repo", repo, "--base", "main", "--json",
+    ]).stdout);
+    assertV1Envelope(run, true);
+    const runWorkspaceId = String(run.data?.workspace_id);
+    const runPath = String(run.data?.path);
+    expect(run.data).toMatchObject({
+      operation_id: "cli-life-run",
+      run_id: "cli-life",
+      branch: "flow/cli-life",
+      base_commit: baseCommit,
+    });
+
+    const jobA = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-job", "--operation-id", "cli-life-job-a", "--run", "cli-life",
+      "--run-workspace", runWorkspaceId, "--job", "job-a", "--attempt", "1",
+      "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    const jobB = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-job", "--operation-id", "cli-life-job-b", "--run", "cli-life",
+      "--run-workspace", runWorkspaceId, "--job", "job-b", "--attempt", "1",
+      "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    expect(jobA.data).toMatchObject({
+      branch: "job/cli-life/job-a/a1",
+      run_workspace_id: runWorkspaceId,
+      base_commit: baseCommit,
+    });
+    expect(jobB.data?.branch).toBe("job/cli-life/job-b/a1");
+    const jobAPath = String(jobA.data?.path);
+    const jobBPath = String(jobB.data?.path);
+    const jobAWorkspaceId = String(jobA.data?.workspace_id);
+    const jobBWorkspaceId = String(jobB.data?.workspace_id);
+
+    // Each job commits a different file through the CLI.
+    gitignoreManifest(jobAPath);
+    gitignoreManifest(jobBPath);
+    fs.writeFileSync(path.join(jobAPath, "file-a.txt"), "from job A\n", "utf-8");
+    const commitA = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "commit", "--operation-id", "cli-life-commit-a", "--workspace", jobAWorkspaceId,
+      "--message", "job-a: add file-a", "--expected-state", "RUNNING", "--json",
+    ]).stdout);
+    assertV1Envelope(commitA, true);
+    expect(commitA.data?.no_op).toBe(false);
+    expect(commitA.data?.changed_files).toContain("file-a.txt");
+    const commitAHead = String(commitA.data?.head_commit);
+
+    fs.writeFileSync(path.join(jobBPath, "file-b.txt"), "from job B\n", "utf-8");
+    const commitB = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "commit", "--operation-id", "cli-life-commit-b", "--workspace", jobBWorkspaceId,
+      "--message", "job-b: add file-b", "--json",
+    ]).stdout);
+    expect(commitB.data?.no_op).toBe(false);
+
+    // Serialized integration with CAS on the Run HEAD.
+    const integrateA = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "integrate", "--operation-id", "cli-life-integrate-a",
+      "--source", jobAWorkspaceId, "--target", runWorkspaceId,
+      "--lock-owner", "flow-engine", "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    assertV1Envelope(integrateA, true);
+    expect(integrateA.data?.merged).toBe(true);
+    expect(integrateA.data?.previous_target_head).toBe(baseCommit);
+    expect(integrateA.data?.changed_files).toContain("file-a.txt");
+    const runHeadAfterA = String(integrateA.data?.resulting_commit);
+
+    // The second integrate follows immediately: the provider resumes the
+    // MERGED Run workspace, so no advance step is needed.
+    const integrateB = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "integrate", "--operation-id", "cli-life-integrate-b",
+      "--source", jobBWorkspaceId, "--target", runWorkspaceId,
+      "--lock-owner", "flow-engine", "--expected-head", runHeadAfterA, "--json",
+    ]).stdout);
+    assertV1Envelope(integrateB, true);
+    expect(integrateB.data?.merged).toBe(true);
+    expect(integrateB.data?.changed_files).toContain("file-b.txt");
+    const finalHead = String(integrateB.data?.resulting_commit);
+
+    // Publish the Run branch with verifiable evidence.
+    const publishOp = "cli-life-publish";
+    const published = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "publish", "--operation-id", publishOp, "--workspace", runWorkspaceId,
+      "--strategy", "branch", "--target-ref", "flow/cli-life",
+      "--expected-head", finalHead, "--json",
+    ]).stdout);
+    assertV1Envelope(published, true);
+    expect(published.data).toMatchObject({
+      operation_id: publishOp,
+      workspace_id: runWorkspaceId,
+      strategy: "branch",
+      resulting_ref: "refs/heads/flow/cli-life",
+      resulting_commit: finalHead,
+    });
+    expect(published.data?.changed_files).toEqual(expect.arrayContaining(["file-a.txt", "file-b.txt"]));
+    const artifact = published.data?.artifact as Record<string, unknown>;
+    expect(artifact.media_type).toBe("text/x-diff");
+    expect(String(artifact.uri)).toMatch(/^file:/);
+    expect(String(artifact.digest)).toMatch(/^sha256:[a-f0-9]{64}$/);
+    const artifactBytes = fs.readFileSync(fileURLToPath(String(artifact.uri)));
+    expect(`sha256:${crypto.createHash("sha256").update(artifactBytes).digest("hex")}`).toBe(artifact.digest);
+
+    // The remote ref now points at the published commit.
+    expect(git(repo, "rev-parse", "flow/cli-life")).toBe(finalHead);
+
+    // Publish replays the original envelope for the same operation ID.
+    const replayed = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "publish", "--operation-id", publishOp, "--workspace", runWorkspaceId,
+      "--strategy", "branch", "--target-ref", "flow/cli-life",
+      "--expected-head", finalHead, "--json",
+    ]).stdout);
+    expect(replayed).toEqual(published);
+
+    // The Run workspace contains both job changes.
+    expect(fs.readFileSync(path.join(runPath, "file-a.txt"), "utf-8")).toContain("from job A");
+    expect(fs.readFileSync(path.join(runPath, "file-b.txt"), "utf-8")).toContain("from job B");
+  }, 60_000);
+
+  it("classifies a same-line integration conflict as a structured non-success envelope", () => {
+    const { repo, stateDir } = makeRepo();
+    fs.writeFileSync(path.join(repo, "conflict.txt"), "line 1\nline 2\nline 3\n", "utf-8");
+    git(repo, "add", ".");
+    git(repo, "commit", "-m", "add conflict file");
+    const baseCommit = git(repo, "rev-parse", "HEAD");
+
+    const run = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-run", "--operation-id", "cli-conflict-run", "--run", "cli-conflict",
+      "--repo", repo, "--base", "main", "--json",
+    ]).stdout);
+    const runWorkspaceId = String(run.data?.workspace_id);
+    const runPath = String(run.data?.path);
+
+    const jobA = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-job", "--operation-id", "cli-conflict-job-a", "--run", "cli-conflict",
+      "--run-workspace", runWorkspaceId, "--job", "job-a", "--attempt", "1",
+      "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    const jobB = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "prepare-job", "--operation-id", "cli-conflict-job-b", "--run", "cli-conflict",
+      "--run-workspace", runWorkspaceId, "--job", "job-b", "--attempt", "1",
+      "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    const jobAPath = String(jobA.data?.path);
+    const jobBPath = String(jobB.data?.path);
+
+    gitignoreManifest(jobAPath);
+    gitignoreManifest(jobBPath);
+    fs.writeFileSync(path.join(jobAPath, "conflict.txt"), "line 1\nline 2 edited by A\nline 3\n", "utf-8");
+    invokeCli([
+      "--state-dir", stateDir,
+      "commit", "--operation-id", "cli-conflict-commit-a", "--workspace", String(jobA.data?.workspace_id),
+      "--message", "job-a: edit line 2", "--json",
+    ]);
+    fs.writeFileSync(path.join(jobBPath, "conflict.txt"), "line 1\nline 2 edited by B\nline 3\n", "utf-8");
+    const commitB = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "commit", "--operation-id", "cli-conflict-commit-b", "--workspace", String(jobB.data?.workspace_id),
+      "--message", "job-b: edit line 2", "--json",
+    ]).stdout);
+    const commitBHead = String(commitB.data?.head_commit);
+
+    const integrateA = parseSingleEnvelope(invokeCli([
+      "--state-dir", stateDir,
+      "integrate", "--operation-id", "cli-conflict-integrate-a",
+      "--source", String(jobA.data?.workspace_id), "--target", runWorkspaceId,
+      "--lock-owner", "flow-engine", "--expected-head", baseCommit, "--json",
+    ]).stdout);
+    assertV1Envelope(integrateA, true);
+    const runHeadAfterA = String(integrateA.data?.resulting_commit);
+
+    // B edits the same line: the provider restores the Run HEAD and reports
+    // structured conflict evidence in the error envelope.
+    const conflictArgs = [
+      "--state-dir", stateDir,
+      "integrate", "--operation-id", "cli-conflict-integrate-b",
+      "--source", String(jobB.data?.workspace_id), "--target", runWorkspaceId,
+      "--lock-owner", "flow-engine", "--expected-head", runHeadAfterA, "--json",
+    ];
+    const conflict = invokeCli(conflictArgs);
+    expect(conflict.status).toBe(1);
+    expect(conflict.stderr).toBe("");
+    const conflictEnvelope = parseSingleEnvelope(conflict.stdout);
+    assertV1Envelope(conflictEnvelope, false);
+    expect(conflictEnvelope.error).toMatchObject({
+      code: "WORKSPACE_INTEGRATION_CONFLICT",
+      details: {
+        source_workspace_id: String(jobB.data?.workspace_id),
+        target_workspace_id: runWorkspaceId,
+        source_commit: commitBHead,
+        previous_target_head: runHeadAfterA,
+        conflict_files: ["conflict.txt"],
+      },
+    });
+
+    // Conflict classification is idempotent: the same envelope replays.
+    const replayed = invokeCli(conflictArgs);
+    expect(replayed.status).toBe(1);
+    expect(parseSingleEnvelope(replayed.stdout)).toEqual(conflictEnvelope);
+
+    // The Run workspace is back at the pre-conflict HEAD and job B's
+    // workspace and commit survive for diagnosis.
+    expect(git(runPath, "rev-parse", "HEAD")).toBe(runHeadAfterA);
+    expect(git(jobBPath, "rev-parse", "HEAD")).toBe(commitBHead);
+  }, 60_000);
 });
