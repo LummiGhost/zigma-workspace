@@ -341,6 +341,8 @@ export type JsonResponse<T = unknown> = JsonOkResponse<T> | JsonErrorResponse;
 
 export const OPERATION_COMMANDS = [
   "create",
+  "prepare_run",
+  "prepare_job",
   "commit",
   "integrate",
   "publish",
@@ -383,6 +385,65 @@ export interface IntegrationLockRow {
   last_heartbeat: string;
 }
 
+// ── Provider: Run and Job-attempt preparation ────────────────────────────────
+
+/** Portable evidence artifact descriptor (contract v1 section 4.3). */
+export interface ArtifactDescriptor {
+  uri: string;
+  mediaType: string;
+  digest: string;
+}
+
+export interface PrepareRunInput {
+  operationId: string;
+  runId: string;
+  repositoryUrl: string;
+  baseRef: string;
+  mode?: "read-only" | "writable";
+  expectedBaseCommit?: string;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+}
+
+export interface RunWorkspaceHandle {
+  operationId: string;
+  runId: string;
+  workspaceId: string;
+  path: string;
+  branch: string;
+  baseRef: string;
+  baseCommit: string;
+  mode: "read-only" | "writable";
+  status: Workspace["status"];
+  createdAt: string;
+}
+
+export interface PrepareJobInput {
+  operationId: string;
+  runId: string;
+  runWorkspaceId: string;
+  jobId: string;
+  attempt: number;
+  expectedRunHead: string;
+  allowedPaths?: string[];
+  deniedPaths?: string[];
+}
+
+export interface JobWorkspaceHandle {
+  operationId: string;
+  runId: string;
+  runWorkspaceId: string;
+  jobId: string;
+  attempt: number;
+  workspaceId: string;
+  path: string;
+  branch: string;
+  baseCommit: string;
+  mode: "read-only" | "writable";
+  status: Workspace["status"];
+  createdAt: string;
+}
+
 // ── Commit ───────────────────────────────────────────────────────────────────
 
 export interface CommitWorkspaceInput {
@@ -400,6 +461,7 @@ export interface CommitWorkspaceResult {
   headCommit: string;
   changedFiles: string[];
   evidenceDigest: string;
+  artifact?: ArtifactDescriptor;
   noOp: boolean;
 }
 
@@ -421,6 +483,8 @@ export interface IntegrateWorkspaceResult {
   sourceCommit: string;
   previousTargetHead: string;
   resultingCommit: string;
+  changedFiles?: string[];
+  artifact?: ArtifactDescriptor;
   merged: boolean;
 }
 
@@ -429,13 +493,14 @@ export interface IntegrateConflictResult {
   sourceWorkspaceId: string;
   targetWorkspaceId: string;
   sourceCommit: string;
+  previousTargetHead: string;
   conflictFiles: string[];
   message: string;
 }
 
 // ── Publish ──────────────────────────────────────────────────────────────────
 
-export type PublishStrategy = "branch" | "merge" | "fast-forward";
+export type PublishStrategy = "none" | "branch" | "merge" | "fast-forward";
 
 export interface PublishWorkspaceInput {
   operationId: string;
@@ -449,9 +514,11 @@ export interface PublishWorkspaceResult {
   operationId: string;
   workspaceId: string;
   strategy: PublishStrategy;
-  resultingRef: string;
+  resultingRef: string | null;
   resultingCommit: string;
   previousRef?: string;
+  changedFiles?: string[];
+  artifact?: ArtifactDescriptor;
 }
 
 // ── Abort ────────────────────────────────────────────────────────────────────

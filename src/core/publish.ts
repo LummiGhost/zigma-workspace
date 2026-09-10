@@ -23,8 +23,12 @@ import {
   isWorkingTreeDirty,
   resolveRef,
   getChangedFiles,
+  generatePatch,
+  diffCommits,
+  getCommitsDiffFiles,
 } from "../git/index.js";
 import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
+import { writeEvidenceArtifact } from "./evidence.js";
 
 function now(): string {
   return new Date().toISOString();
@@ -48,8 +52,16 @@ export function publishWorkspace(
 ): PublishWorkspaceResult {
   const { operationId, workspaceId, strategy, targetRef, expectedHead } = input;
 
+  const canonicalInput = {
+    operationId,
+    workspaceId,
+    strategy,
+    targetRef,
+    expectedHead: expectedHead ?? null,
+  };
+
   // Check idempotency
-  const inputHash = hashInput(input);
+  const inputHash = hashInput(canonicalInput);
   const idempotent = getIdempotencyRecord(db, operationId);
   if (idempotent) {
     if (idempotent.input_hash !== inputHash) {
@@ -122,10 +134,21 @@ export function publishWorkspace(
   insertOperationJournal(db, journalRow);
 
   try {
-    let resultingRef: string;
+    let resultingRef: string | null;
     let previousRef: string | undefined;
+    let changedFiles: string[] | undefined;
+    let patch: string;
 
     switch (strategy) {
+      case "none": {
+        // No ref update; record the run evidence only. The manifest keeps
+        // the creation base commit, while row.base_commit advances with
+        // each integrate.
+        resultingRef = null;
+        changedFiles = getChangedFiles(row.path, manifest.base_commit);
+        patch = generatePatch(row.path, manifest.base_commit);
+        break;
+      }
       case "branch": {
         resultingRef = `refs/heads/${targetRef}`;
 
@@ -142,6 +165,14 @@ export function publishWorkspace(
 
         // Push the workspace branch to the target ref
         pushBranch(cacheRow.mirror_path, row.branch, targetRef);
+
+        // Evidence between the previous target ref (or the workspace's
+        // creation base, which the manifest preserves) and the published
+        // commit. row.base_commit cannot be used here: integrate advances
+        // it, so it equals headCommit after the first merge.
+        const evidenceBase = previousRef ?? manifest.base_commit;
+        changedFiles = getCommitsDiffFiles(cacheRow.mirror_path, evidenceBase, headCommit);
+        patch = diffCommits(cacheRow.mirror_path, evidenceBase, headCommit);
         break;
       }
       case "merge":
@@ -159,6 +190,8 @@ export function publishWorkspace(
         );
     }
 
+    const artifact = writeEvidenceArtifact(configForWorkspaceDatabase(db, row.path), workspaceId, operationId, patch);
+
     const result: PublishWorkspaceResult = {
       operationId,
       workspaceId,
@@ -166,6 +199,8 @@ export function publishWorkspace(
       resultingRef,
       resultingCommit: headCommit,
       previousRef,
+      changedFiles,
+      artifact,
     };
 
     const resultJson = JSON.stringify(result);

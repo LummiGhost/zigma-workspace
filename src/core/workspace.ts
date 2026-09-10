@@ -75,7 +75,7 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
  * Ensure a repository mirror exists and is up-to-date.
  * Returns the cache record.
  */
-function ensureRepositoryCache(
+export function ensureRepositoryCache(
   db: Database.Database,
   config: ZigmaWorkspaceConfig,
   repoUrl: string

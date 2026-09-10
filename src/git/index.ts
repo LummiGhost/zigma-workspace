@@ -504,9 +504,24 @@ export function mergeCommit(
 }
 
 /**
- * Attempt a merge and return conflict files if it fails.
+ * List paths with unmerged (conflict) index entries in a worktree.
+ */
+export function getUnmergedFiles(workspacePath: string): string[] {
+  const output = runGit(
+    ["-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=U"],
+    workspacePath
+  );
+  return output
+    .split("\n")
+    .map((f) => f.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Attempt a merge and return the conflict file list if it fails.
  * On conflict, aborts the merge to restore clean state.
  * Returns { success: true, commit } or { success: false, conflictFiles }.
+ * Non-conflict git failures rethrow the original error.
  */
 export function mergeOrConflict(
   workspacePath: string,
@@ -531,6 +546,15 @@ export function mergeOrConflict(
     const commit = getHeadCommit(workspacePath)!;
     return { success: true, commit };
   } catch (err) {
+    // Collect unmerged paths before aborting: abort resets the index,
+    // which would erase the conflict evidence.
+    let conflictFiles: string[] = [];
+    try {
+      conflictFiles = getUnmergedFiles(workspacePath);
+    } catch {
+      // Can't get conflict files
+    }
+
     // Abort merge to restore clean state
     try {
       runGit(["merge", "--abort"], workspacePath);
@@ -543,28 +567,30 @@ export function mergeOrConflict(
       }
     }
 
-    // Collect conflict file list
-    let conflictFiles: string[] = [];
-    try {
-      const output = runGit(["-c", "core.quotepath=false", "diff", "--name-only", "--diff-filter=U"], workspacePath);
-      conflictFiles = output
-        .split("\n")
-        .map((f) => f.trim())
-        .filter(Boolean);
-    } catch {
-      // Can't get conflict files
+    if (conflictFiles.length === 0) {
+      // Not a conflict: genuine git failure
+      throw err;
     }
-
-    if (err instanceof GitError) {
-      // Pass through with conflict context
-      throw new GitError(
-        `Merge conflict: ${err.message}`,
-        err.command,
-        err.stderr
-      );
-    }
-    throw err;
+    return { success: false, conflictFiles };
   }
+}
+
+/**
+ * Diff two commits (works in bare mirrors).
+ */
+export function diffCommits(repoPath: string, from: string, to: string): string {
+  return runGit(["diff", `${from}..${to}`], repoPath);
+}
+
+/**
+ * List files changed between two commits (works in bare mirrors).
+ */
+export function getCommitsDiffFiles(repoPath: string, from: string, to: string): string[] {
+  const output = runGit(["diff", "--name-only", `${from}..${to}`], repoPath);
+  return output
+    .split("\n")
+    .map((f) => f.trim())
+    .filter(Boolean);
 }
 
 /**

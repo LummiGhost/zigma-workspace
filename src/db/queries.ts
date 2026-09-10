@@ -442,6 +442,20 @@ export function updateOperationJournalStatus(
   ).run(status, resultJson, updatedAt, operationId, workspaceId);
 }
 
+/**
+ * Re-point a journal row at its real workspace after the workspace row is
+ * created (prepare operations journal with a placeholder workspace id).
+ */
+export function updateOperationJournalWorkspace(
+  db: Database.Database,
+  operationId: string,
+  workspaceId: string
+): void {
+  db.prepare(
+    `UPDATE operation_journal SET workspace_id = ? WHERE operation_id = ?`
+  ).run(workspaceId, operationId);
+}
+
 export function listOperationJournalForWorkspace(
   db: Database.Database,
   workspaceId: string
