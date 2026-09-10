@@ -11,7 +11,7 @@ import { getWorkspaceById } from "../db/queries.js";
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "./events.js";
@@ -128,7 +128,7 @@ export function commitWorkspace(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   try {
     const baseCommit = row.base_commit;

@@ -142,12 +142,18 @@ Flow 按以下顺序消费 provider 操作：
 1. `prepare-run`（operation id `run:<runId>:create`）创建或采用 Run
    workspace，分支 `flow/<runId>`，状态推进到 `RUNNING`。`--expected-base`
    提供创建前 CAS；重试相同 operation id 回放首次结果，崩溃重试采用已拥有
-   该分支的 workspace。
+   该分支的 workspace。采用（adopt）已存在的 workspace 时，`expected_base`
+   与 manifest 的创建基线 commit 做大小写不敏感比较（manifest 不可读时回退
+   到 registry 记录的 `base_commit`），不一致抛 `WORKSPACE_HEAD_CONFLICT`。
 2. `prepare-job`（operation id `run:<runId>:job:<jobId>:attempt:<n>:create`）
    从精确的 `expected_run_head`（完整 40 位 SHA，且必须是当前 Run HEAD 的
    祖先）创建 attempt workspace。attempt 分支属于同级的 `job/` 命名空间；
    同一 attempt 的 workspace 被复用时校验其 `base_commit` 与
-   `expected_run_head` 一致。
+   `expected_run_head` 一致。所有 SHA 比较大小写不敏感。
+   创建 workspace 时 manifest 文件 `.zigma-workspace.json` 自动写入该仓库
+   `info/exclude`（通过 `git rev-parse --git-path info/exclude` 定位，linked
+   worktree 读取的是 common dir 下的文件），因此它不会出现在 `git status`、
+   diff、commit 或 evidence 中。
 3. Job 完成后 `commit` 提交全部变更；结果携带 `head_commit`、
    `changed_files` 和 evidence artifact descriptor。
 4. `integrate` 把 Job commit 串行合并进 Run workspace：先获取 target 的
@@ -162,7 +168,10 @@ Flow 按以下顺序消费 provider 操作：
 6. 全部集成完成后 `publish` 按 `none`（只记录 evidence）或 `branch`
    （推送目标 ref）策略交付，`expected_head` CAS 保护，结果携带
    `resulting_ref`、`resulting_commit`、`changed_files` 和 evidence
-   artifact。
+   artifact。`branch` 策略的 target ref 必须是裸分支名：拒绝 `refs/` 前缀
+   并通过 `git check-ref-format refs/heads/<target>` 校验，防止逃逸到
+   `refs/tags/*` 等命名空间。push 崩溃重试时（ref 已指向目标 commit），
+   evidence 以目标 ref 之前的位置（或 manifest 创建基线）为基准计算。
 
 `commit`/`integrate`/`publish` 与 `prepare-run`/`prepare-job` 同样要求
 operation id 和规范化输入；输入哈希变化触发 `OPERATION_ID_CONFLICT`。
@@ -261,7 +270,10 @@ CLEANUP_FAILED --------------------------------------> CLEANED or FAILED
 5. `CLEANED` 是终态；同一 workspace id 不可重新激活。
 6. `integrate` 成功后 target 处于 `MERGED`；下一次 `integrate` 隐式经过
    `MERGED → RUNNING` 恢复串行周期。`CONFLICT → MERGING` 同样合法，用于
-   冲突解决后的 retry-merge。
+   冲突解决后的 retry-merge。`MERGING → RUNNING` 是非冲突失败（如锁冲突、
+   evidence 写入失败）后的恢复边：integrate 失败时把 target 恢复为集成前
+   状态并 `reset --hard` 到原 HEAD，相同或新 operation id 均可重试；`abort`
+   也允许 `MERGING`/`CONFLICT → RUNNING`。
 
 ## 6. 幂等和并发
 

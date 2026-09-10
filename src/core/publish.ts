@@ -10,7 +10,7 @@ import { getWorkspaceById } from "../db/queries.js";
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
   getRepositoryCacheByUrl,
 } from "../db/queries.js";
@@ -26,6 +26,7 @@ import {
   generatePatch,
   diffCommits,
   getCommitsDiffFiles,
+  checkRefFormat,
 } from "../git/index.js";
 import { assertChangedPathsAllowed, assertWorkspaceBoundary, assertWritable, configForWorkspaceDatabase } from "./isolation-policy.js";
 import { writeEvidenceArtifact } from "./evidence.js";
@@ -120,7 +121,7 @@ export function publishWorkspace(
 
   const ts = now();
 
-  // Record operation started
+  // Record operation started, reusing a journal row left by a failed attempt
   const journalRow: OperationJournalRow = {
     operation_id: operationId,
     workspace_id: workspaceId,
@@ -131,7 +132,7 @@ export function publishWorkspace(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   try {
     let resultingRef: string | null;
@@ -150,6 +151,17 @@ export function publishWorkspace(
         break;
       }
       case "branch": {
+        // Validate the target ref before interpolating it into refspecs.
+        // The raw name is pushed verbatim, so it must stay inside
+        // refs/heads/ (no refs/tags/* escape) and pass git's own ref-name
+        // rules (no wildcards, no "..", no leading dash).
+        if (targetRef.startsWith("refs/") || !checkRefFormat(`refs/heads/${targetRef}`)) {
+          throw new ZigmaError(
+            "INVALID_INPUT",
+            `Invalid target ref "${targetRef}"`,
+            { workspaceId, targetRef },
+          );
+        }
         resultingRef = `refs/heads/${targetRef}`;
 
         // Check if target branch exists and get its current commit
@@ -169,8 +181,12 @@ export function publishWorkspace(
         // Evidence between the previous target ref (or the workspace's
         // creation base, which the manifest preserves) and the published
         // commit. row.base_commit cannot be used here: integrate advances
-        // it, so it equals headCommit after the first merge.
-        const evidenceBase = previousRef ?? manifest.base_commit;
+        // it, so it equals headCommit after the first merge. When a crash
+        // retry finds the ref already pointing at headCommit (the push
+        // completed but the result was never recorded), fall back to the
+        // creation base so the evidence is not empty.
+        const evidenceBase =
+          previousRef && previousRef !== headCommit ? previousRef : manifest.base_commit;
         changedFiles = getCommitsDiffFiles(cacheRow.mirror_path, evidenceBase, headCommit);
         patch = diffCommits(cacheRow.mirror_path, evidenceBase, headCommit);
         break;

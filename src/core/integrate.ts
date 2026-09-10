@@ -13,7 +13,7 @@ import { getWorkspaceById, updateWorkspaceStatus } from "../db/queries.js";
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
   updateWorkspaceHead,
 } from "../db/queries.js";
@@ -166,7 +166,7 @@ export function integrateWorkspace(
 
   const ts = now();
 
-  // Record operation started
+  // Record operation started, reusing a journal row left by a failed attempt
   const journalRow: OperationJournalRow = {
     operation_id: operationId,
     workspace_id: targetWorkspaceId,
@@ -177,22 +177,24 @@ export function integrateWorkspace(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
-  // Acquire integration lock
-  acquireIntegrationLock(db, targetWorkspaceId, lockOwner, lockExpiresAt);
+  const originalStatus = targetRow.status;
 
   try {
+    // Acquire integration lock
+    acquireIntegrationLock(db, targetWorkspaceId, lockOwner, lockExpiresAt);
+
     // Transition target to MERGING. A completed previous integration leaves
     // the target in MERGED; the flow protocol serializes integrations
     // back-to-back with no advance step between them, so integrate resumes
     // MERGED through RUNNING implicitly (mirroring the CONFLICT → MERGING
     // retry-merge edge).
-    if (targetRow.status === "MERGED") {
+    if (originalStatus === "MERGED") {
       updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGED", "RUNNING"), now());
       updateWorkspaceStatus(db, targetWorkspaceId, transition("RUNNING", "MERGING"), now());
     } else {
-      updateWorkspaceStatus(db, targetWorkspaceId, transition(targetRow.status as never, "MERGING"), now());
+      updateWorkspaceStatus(db, targetWorkspaceId, transition(originalStatus as never, "MERGING"), now());
     }
 
     const mergeResult = mergeOrConflict(
@@ -236,12 +238,8 @@ export function integrateWorkspace(
 
     const resultingCommit = mergeResult.commit;
 
-    // Update target's base_commit
-    updateWorkspaceHead(db, targetWorkspaceId, resultingCommit, now());
-
-    // Transition to MERGED
-    updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGING", "MERGED"), now());
-
+    // Build evidence before mutating the database: if the artifact write
+    // fails, the row must not claim a merge that was reset away.
     const changedFiles = getChangedFiles(targetRow.path, previousTargetHead);
     const patch = generatePatch(targetRow.path, previousTargetHead);
     const artifact = writeEvidenceArtifact(
@@ -250,6 +248,12 @@ export function integrateWorkspace(
       operationId,
       patch,
     );
+
+    // Update target's base_commit
+    updateWorkspaceHead(db, targetWorkspaceId, resultingCommit, now());
+
+    // Transition to MERGED
+    updateWorkspaceStatus(db, targetWorkspaceId, transition("MERGING", "MERGED"), now());
 
     const result: IntegrateWorkspaceResult = {
       operationId,
@@ -287,14 +291,34 @@ export function integrateWorkspace(
     });
     updateOperationJournalStatus(db, operationId, targetWorkspaceId, "failed", errorJson, now());
 
-    // Try to restore target state
+    // Try to restore target state. If the target is still MERGING, walk it
+    // back to the pre-integration status so a retry (same or new operation
+    // id) is not blocked by an illegal MERGING → MERGING transition.
+    try {
+      const current = getWorkspaceById(db, targetWorkspaceId);
+      if (current?.status === "MERGING") {
+        updateWorkspaceStatus(
+          db,
+          targetWorkspaceId,
+          transition("MERGING", originalStatus as never),
+          now(),
+        );
+      }
+    } catch {
+      // Best effort
+    }
+
     try {
       resetHard(targetRow.path, previousTargetHead);
     } catch {
       // Best effort
     }
 
-    releaseIntegrationLock(db, targetWorkspaceId, lockOwner);
+    try {
+      releaseIntegrationLock(db, targetWorkspaceId, lockOwner);
+    } catch {
+      // Best effort
+    }
     throw err;
   }
 }
@@ -328,7 +352,7 @@ export function abortIntegration(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   const message = reason ?? "Integration aborted";
 

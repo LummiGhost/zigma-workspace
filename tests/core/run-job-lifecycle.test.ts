@@ -12,6 +12,8 @@ import { commitWorkspace } from "../../src/core/commit.js";
 import { integrateWorkspace } from "../../src/core/integrate.js";
 import { publishWorkspace } from "../../src/core/publish.js";
 import { getWorkspace, listAllWorkspaces } from "../../src/core/workspace.js";
+import { acquireIntegrationLock, releaseIntegrationLock } from "../../src/core/integration-lock.js";
+import { transition } from "../../src/core/state-machine.js";
 import { getHeadCommit } from "../../src/git/index.js";
 import type { Database } from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
@@ -57,19 +59,6 @@ function setupRepo(): TestContext {
 
 function uniqueId(): string {
   return crypto.randomUUID();
-}
-
-/** Gitignore the manifest so job commits don't collide on it. */
-function prepareWorkspaceForCommit(workspacePath: string): void {
-  const gitignorePath = path.join(workspacePath, ".gitignore");
-  const ignoreLine = ".zigma-workspace.json";
-  if (fs.existsSync(gitignorePath)) {
-    const content = fs.readFileSync(gitignorePath, "utf-8");
-    if (content.split("\n").some((l) => l.trim() === ignoreLine)) return;
-  }
-  fs.appendFileSync(gitignorePath, `${ignoreLine}\n`, "utf-8");
-  git(workspacePath, "add", ".gitignore");
-  git(workspacePath, "-c", "user.email=zigma-workspace@local", "-c", "user.name=zigma-workspace", "commit", "-m", "infrastructure: ignore manifest");
 }
 
 function verifyArtifact(artifact: { uri: string; digest: string } | undefined, expectedBytes?: number): void {
@@ -339,10 +328,8 @@ describe("Run + Job-attempt lifecycle", () => {
       expectedRunHead: run.baseCommit,
     });
 
-    prepareWorkspaceForCommit(jobA.path);
-    prepareWorkspaceForCommit(jobB.path);
-
-    // Job A changes file A
+    // The provider excludes the workspace manifest from staging itself
+    // (per-worktree info/exclude), so no gitignore setup is needed here.
     fs.writeFileSync(path.join(jobA.path, "file-a.txt"), "from job A\n", "utf-8");
     const commitAOp = uniqueId();
     const commitA = commitWorkspace(ctx.db, {
@@ -353,6 +340,7 @@ describe("Run + Job-attempt lifecycle", () => {
     });
     expect(commitA.noOp).toBe(false);
     expect(commitA.changedFiles).toContain("file-a.txt");
+    expect(commitA.changedFiles).not.toContain(".zigma-workspace.json");
     expect(commitA.baseCommit).toBe(run.baseCommit);
     verifyArtifact(commitA.artifact);
 
@@ -445,6 +433,33 @@ describe("Run + Job-attempt lifecycle", () => {
       expectedHead: finalHead,
     });
     expect(replayPublish.resultingCommit).toBe(finalHead);
+
+    // A second publish with a fresh operation id (the ref already points at
+    // the published commit, as after a crash between push and result
+    // recording) still reports the full change set: the evidence base falls
+    // back to the creation base instead of producing an empty diff.
+    const republish = publishWorkspace(ctx.db, {
+      operationId: uniqueId(),
+      workspaceId: run.workspaceId,
+      strategy: "branch",
+      targetRef: `flow/run-life`,
+      expectedHead: finalHead,
+    });
+    expect(republish.changedFiles).toEqual(expect.arrayContaining(["file-a.txt", "file-b.txt"]));
+    verifyArtifact(republish.artifact);
+
+    // Target refs outside refs/heads/ are rejected before any refspec is
+    // built: the raw name is pushed verbatim, so a refs/tags/* escape must
+    // not reach git.
+    expect(() =>
+      publishWorkspace(ctx.db, {
+        operationId: uniqueId(),
+        workspaceId: run.workspaceId,
+        strategy: "branch",
+        targetRef: "refs/tags/evil",
+        expectedHead: finalHead,
+      }),
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
   });
 
   it("restores the Run HEAD on same-line conflict and preserves structured evidence", () => {
@@ -483,9 +498,6 @@ describe("Run + Job-attempt lifecycle", () => {
       attempt: 1,
       expectedRunHead: newBase,
     });
-
-    prepareWorkspaceForCommit(jobA.path);
-    prepareWorkspaceForCommit(jobB.path);
 
     // A edits line 2
     fs.writeFileSync(
@@ -603,7 +615,6 @@ describe("concurrent Run/Job stress", () => {
 
     // Each job commits a different file.
     const commits = handles.map((handle, i) => {
-      prepareWorkspaceForCommit(handle.path);
       fs.writeFileSync(path.join(handle.path, jobs[i].fileName), jobs[i].content, "utf-8");
       const result = commitWorkspace(ctx.db, {
         operationId: uniqueId(),
@@ -660,5 +671,97 @@ describe("concurrent Run/Job stress", () => {
       new Set(["job/run-stress/job-multi/a1", "job/run-stress/job-multi/a2", "job/run-stress/job-multi/a3"]),
     );
     expect(attempts.every((a) => a.baseCommit === expectedHead)).toBe(true);
+  });
+});
+
+// ── Recovery and validation regressions ───────────────────────────────────────
+
+describe("recovery and validation", () => {
+  it("replays a failed integrate with the same operation id", () => {
+    const ctx = setupRepo();
+    const run = prepareRun(ctx.db, ctx.config, {
+      operationId: uniqueId(),
+      runId: "run-retry",
+      repositoryUrl: ctx.repo,
+      baseRef: "main",
+    });
+    const jobA = prepareJob(ctx.db, ctx.config, {
+      operationId: uniqueId(),
+      runId: "run-retry",
+      runWorkspaceId: run.workspaceId,
+      jobId: "job-a",
+      attempt: 1,
+      expectedRunHead: run.baseCommit,
+    });
+    fs.writeFileSync(path.join(jobA.path, "file-a.txt"), "from job A\n", "utf-8");
+    const commitA = commitWorkspace(ctx.db, {
+      operationId: uniqueId(),
+      workspaceId: jobA.workspaceId,
+      message: "job-a: add file-a",
+    });
+    expect(commitA.noOp).toBe(false);
+
+    // Another owner holds the integration lock: the first attempt fails
+    // before the merge, leaving a 'failed' journal row behind.
+    acquireIntegrationLock(ctx.db, run.workspaceId, "other-owner", null);
+    const op = uniqueId();
+    expect(() =>
+      integrateWorkspace(ctx.db, {
+        operationId: op,
+        sourceWorkspaceId: jobA.workspaceId,
+        targetWorkspaceId: run.workspaceId,
+        expectedHead: run.baseCommit,
+        lockOwner: "flow-engine",
+      }),
+    ).toThrow();
+    releaseIntegrationLock(ctx.db, run.workspaceId, "other-owner");
+
+    // The same operation id must retry cleanly instead of colliding with
+    // the existing journal row.
+    const integrated = integrateWorkspace(ctx.db, {
+      operationId: op,
+      sourceWorkspaceId: jobA.workspaceId,
+      targetWorkspaceId: run.workspaceId,
+      expectedHead: run.baseCommit,
+      lockOwner: "flow-engine",
+    });
+    expect(integrated.merged).toBe(true);
+  });
+
+  it("enforces the expected base CAS when adopting an existing Run workspace", () => {
+    const ctx = setupRepo();
+    const run = prepareRun(ctx.db, ctx.config, {
+      operationId: uniqueId(),
+      runId: "run-adopt",
+      repositoryUrl: ctx.repo,
+      baseRef: "main",
+      expectedBaseCommit: ctx.baseCommit,
+    });
+
+    // Adoption with the same expected base returns the same workspace.
+    const adopted = prepareRun(ctx.db, ctx.config, {
+      operationId: uniqueId(),
+      runId: "run-adopt",
+      repositoryUrl: ctx.repo,
+      baseRef: "main",
+      expectedBaseCommit: ctx.baseCommit,
+    });
+    expect(adopted.workspaceId).toBe(run.workspaceId);
+
+    // Adoption with a mismatched expected base is a CAS conflict, not a
+    // silent rebase onto a different baseline.
+    expect(() =>
+      prepareRun(ctx.db, ctx.config, {
+        operationId: uniqueId(),
+        runId: "run-adopt",
+        repositoryUrl: ctx.repo,
+        baseRef: "main",
+        expectedBaseCommit: "0".repeat(40),
+      }),
+    ).toThrow(expect.objectContaining({ code: "WORKSPACE_HEAD_CONFLICT" }));
+  });
+
+  it("allows MERGING → RUNNING so a failed integrate can restore the target", () => {
+    expect(transition("MERGING", "RUNNING")).toBe("RUNNING");
   });
 });

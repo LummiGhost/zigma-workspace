@@ -594,6 +594,38 @@ export function getCommitsDiffFiles(repoPath: string, from: string, to: string):
 }
 
 /**
+ * Validate a fully-qualified ref name using git's own rules.
+ */
+export function checkRefFormat(ref: string): boolean {
+  try {
+    runGit(["check-ref-format", ref]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Exclude a path pattern from git staging in a worktree, via the
+ * info/exclude file (never tracked, never committed). Linked worktrees read
+ * this file from the common dir, so resolve the path through git itself.
+ */
+export function addWorktreeExclude(workspacePath: string, pattern: string): void {
+  const excludePath = path.resolve(
+    workspacePath,
+    runGit(["rev-parse", "--git-path", "info/exclude"], workspacePath).trim(),
+  );
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true });
+  let content = "";
+  if (fs.existsSync(excludePath)) {
+    content = fs.readFileSync(excludePath, "utf-8");
+    if (content.split(/\r?\n/).some((line) => line === pattern)) return;
+  }
+  const separator = content === "" || content.endsWith("\n") ? "" : "\n";
+  fs.appendFileSync(excludePath, `${separator}${pattern}\n`, "utf-8");
+}
+
+/**
  * Push a branch to the specified remote and ref.
  * Throws GitError on failure.
  */

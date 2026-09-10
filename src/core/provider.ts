@@ -22,6 +22,7 @@ import {
   getWorkspaceById,
 } from "../db/queries.js";
 import { createWorkspace, bindRun, ensureRepositoryCache } from "./workspace.js";
+import { assertWorkspaceBoundary, configForWorkspaceDatabase } from "./isolation-policy.js";
 import { checkGitAvailable, getHeadCommit, isAncestor, resolveRef } from "../git/index.js";
 
 const BRANCH_SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -214,7 +215,25 @@ export function prepareRun(
   const existing = findWorkspaceByBranch(db, repositoryUrl, branch);
   if (existing) {
     // Deterministic adoption: the branch is already owned (previous run or
-    // crash between worktree creation and journal completion).
+    // crash between worktree creation and journal completion). The expected
+    // base CAS still applies — it must match the workspace's creation base,
+    // which the manifest preserves even after integrates advance the row.
+    if (input.expectedBaseCommit) {
+      let creationBase = existing.base_commit;
+      try {
+        const manifest = assertWorkspaceBoundary(configForWorkspaceDatabase(db, existing.path), existing);
+        creationBase = manifest.base_commit;
+      } catch {
+        // Manifest unreadable — fall back to the registry row.
+      }
+      if (creationBase.toLowerCase() !== input.expectedBaseCommit.toLowerCase()) {
+        throw new ZigmaError(
+          "WORKSPACE_HEAD_CONFLICT",
+          `Workspace ${existing.id} already owns branch ${branch} but was created from ${creationBase}, expected ${input.expectedBaseCommit}`,
+          { workspaceId: existing.id, branch, expected: input.expectedBaseCommit, actual: creationBase },
+        );
+      }
+    }
     const handle = rowToRunHandle(existing, operationId, runId);
     startJournal(db, operationId, existing.id, "prepare_run", inputHash, now());
     recordCompleted(db, operationId, existing.id, "prepare_run", inputHash, handle, now());
@@ -225,7 +244,7 @@ export function prepareRun(
   // partial state behind.
   const cache = ensureRepositoryCache(db, config, repositoryUrl);
   const resolvedBase = resolveRef(cache.mirror_path, baseRef);
-  if (input.expectedBaseCommit && resolvedBase !== input.expectedBaseCommit) {
+  if (input.expectedBaseCommit && resolvedBase.toLowerCase() !== input.expectedBaseCommit.toLowerCase()) {
     throw new ZigmaError(
       "WORKSPACE_HEAD_CONFLICT",
       `Expected base commit ${input.expectedBaseCommit}, resolved ${resolvedBase}`,
@@ -363,7 +382,7 @@ export function prepareJob(
   const branch = `job/${runId}/${jobId}/a${attempt}`;
   const existing = findWorkspaceByBranch(db, runRow.repository_url, branch);
   if (existing) {
-    if (existing.base_commit !== expectedRunHead) {
+    if (existing.base_commit.toLowerCase() !== expectedRunHead.toLowerCase()) {
       throw new ZigmaError(
         "WORKSPACE_HEAD_CONFLICT",
         `Workspace ${existing.id} already owns branch ${branch} but was created from ${existing.base_commit}, expected ${expectedRunHead}`,
@@ -407,7 +426,7 @@ export function prepareJob(
     if (!row) {
       throw new ZigmaError("INTERNAL_ERROR", `Workspace ${workspace.id} disappeared after prepareJob`, { workspaceId: workspace.id });
     }
-    if (row.base_commit !== expectedRunHead) {
+    if (row.base_commit.toLowerCase() !== expectedRunHead.toLowerCase()) {
       throw new ZigmaError(
         "WORKSPACE_HEAD_CONFLICT",
         `Job workspace was created from ${row.base_commit}, expected ${expectedRunHead}`,

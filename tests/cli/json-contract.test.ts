@@ -59,11 +59,6 @@ function assertV1Envelope(envelope: JsonEnvelope, ok: boolean): void {
   expect(envelope.ok).toBe(ok);
 }
 
-/** Keep the untracked workspace manifest out of the job commit's change set. */
-function gitignoreManifest(workspacePath: string): void {
-  fs.appendFileSync(path.join(workspacePath, ".gitignore"), ".zigma-workspace.json\n", "utf-8");
-}
-
 function canonicalHash(value: Record<string, unknown>): string {
   const sorted = Object.keys(value).sort().reduce<Record<string, unknown>>((result, key) => {
     result[key] = value[key];
@@ -429,9 +424,9 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     const jobAWorkspaceId = String(jobA.data?.workspace_id);
     const jobBWorkspaceId = String(jobB.data?.workspace_id);
 
-    // Each job commits a different file through the CLI.
-    gitignoreManifest(jobAPath);
-    gitignoreManifest(jobBPath);
+    // Each job commits a different file through the CLI. The provider
+    // excludes the workspace manifest from git staging itself (per-worktree
+    // info/exclude), so no caller-side gitignore setup is required.
     fs.writeFileSync(path.join(jobAPath, "file-a.txt"), "from job A\n", "utf-8");
     const commitA = parseSingleEnvelope(invokeCli([
       "--state-dir", stateDir,
@@ -441,6 +436,7 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     assertV1Envelope(commitA, true);
     expect(commitA.data?.no_op).toBe(false);
     expect(commitA.data?.changed_files).toContain("file-a.txt");
+    expect(commitA.data?.changed_files).not.toContain(".zigma-workspace.json");
     const commitAHead = String(commitA.data?.head_commit);
 
     fs.writeFileSync(path.join(jobBPath, "file-b.txt"), "from job B\n", "utf-8");
@@ -548,8 +544,6 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
     const jobAPath = String(jobA.data?.path);
     const jobBPath = String(jobB.data?.path);
 
-    gitignoreManifest(jobAPath);
-    gitignoreManifest(jobBPath);
     fs.writeFileSync(path.join(jobAPath, "conflict.txt"), "line 1\nline 2 edited by A\nline 3\n", "utf-8");
     invokeCli([
       "--state-dir", stateDir,

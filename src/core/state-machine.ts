@@ -27,7 +27,10 @@ export const TRANSITIONS: Record<WorkspaceState, readonly WorkspaceState[]> = {
   READY: ["RUNNING", "FAILED", "ARCHIVED"],
   RUNNING: ["WAIT_REVIEW", "MERGING", "FAILED", "ARCHIVED"],
   WAIT_REVIEW: ["MERGED", "FAILED"],
-  MERGING: ["MERGED", "CONFLICT", "FAILED"],
+  // MERGING → RUNNING is the abort/recovery edge: a failed integration
+  // restores the target to its pre-integration status so retries are not
+  // blocked by an illegal MERGING → MERGING transition.
+  MERGING: ["MERGED", "CONFLICT", "FAILED", "RUNNING"],
   CONFLICT: ["MERGING", "FAILED", "ARCHIVED"],
   MERGED: ["CLEANED", "FAILED", "ARCHIVED", "RUNNING"],
   CLEANED: [],
