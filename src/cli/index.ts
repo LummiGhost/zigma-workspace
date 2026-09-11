@@ -40,6 +40,7 @@ import { GitError } from "../git/index.js";
 import type { Workspace, ZigmaErrorCode, GarbageCollectResult } from "../types/index.js";
 import type Database from "better-sqlite3";
 import { getCapacityStatus } from "../core/isolation-policy.js";
+import { MANAGED_REQUIRED_CAPABILITIES, validateProviderContract } from "../core/negotiation.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json") as { version: string };
@@ -268,6 +269,20 @@ program
 
 // ── contract-info ─────────────────────────────────────────────────────────
 
+function buildContractInfo() {
+  const capabilities = [...WORKSPACE_CAPABILITIES];
+  return {
+    provider: "zigma-workspace",
+    package_version: version,
+    contract_version: CONTRACT_VERSION,
+    capabilities,
+    managed_supported: MANAGED_REQUIRED_CAPABILITIES.every((c) =>
+      capabilities.includes(c),
+    ),
+    managed_required_capabilities: [...MANAGED_REQUIRED_CAPABILITIES],
+  };
+}
+
 program
   .command("contract-info")
   .description("Report the provider contract and capabilities without side effects")
@@ -277,15 +292,40 @@ program
     // Deliberately do not call setup(): this command must remain safe for a
     // caller to run during admission/handshake before a state directory,
     // database, mirror, or workspace exists.
-    outputOk(
-      {
-        provider: "zigma-workspace",
-        package_version: version,
-        contract_version: CONTRACT_VERSION,
-        capabilities: [...WORKSPACE_CAPABILITIES],
-      },
-      useJson
-    );
+    outputOk(buildContractInfo(), useJson);
+  });
+
+// ── negotiate ─────────────────────────────────────────────────────────────
+
+program
+  .command("negotiate")
+  .description("Validate the provider contract for a consumer role without side effects")
+  .option("--role <role>", "Consumer role to negotiate; only \"managed\" is defined", "managed")
+  .option("--json", "Output JSON")
+  .action((opts: { role?: string; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    const role = opts.role ?? "managed";
+    try {
+      if (role !== "managed") {
+        outputError("INVALID_INPUT", `Unsupported negotiation role "${role}". Only "managed" is defined`, useJson);
+      }
+      const info = buildContractInfo();
+      const result = validateProviderContract(info, MANAGED_REQUIRED_CAPABILITIES);
+      outputOk(
+        {
+          role: "managed",
+          provider: result.provider,
+          contract_version: result.contractVersion,
+          package_version: info.package_version,
+          supported: result.supported,
+          required_capabilities: result.requiredCapabilities,
+          capabilities: result.capabilities,
+        },
+        useJson
+      );
+    } catch (err) {
+      catchError(err, useJson);
+    }
   });
 
 // ── create ─────────────────────────────────────────────────────────────────
