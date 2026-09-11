@@ -171,8 +171,11 @@ export function detectOrphanWorktrees(
           (r) => canonicalizePath(r.path) === canonicalizePath(wt.path)
         );
         orphans.push({
-          // Report the on-disk long form so consumers see the same path the
-          // registry uses, not a git-porcelain 8.3 alias like RUNNER~1.
+          // Report the on-disk long form that git porcelain resolves to, so
+          // consumers never see an 8.3 alias like RUNNER~1. Registry rows may
+          // themselves hold aliases when the host temp dir advertises one
+          // (short TMP env on CI), so consumers must compare paths
+          // canonically, never byte-for-byte.
           path: resolveRealPath(wt.path),
           branch: wt.branch,
           commit: wt.commit,

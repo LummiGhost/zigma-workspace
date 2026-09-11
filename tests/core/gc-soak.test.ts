@@ -18,6 +18,7 @@ import { createWorkspace } from "../../src/core/workspace.js";
 import { lockWorkspace } from "../../src/core/lock.js";
 import { garbageCollect, planGarbageCollection } from "../../src/core/gc.js";
 import { getRepositoryCacheByUrl, getWorkspaceById } from "../../src/db/queries.js";
+import { canonicalizePath } from "../../src/git/index.js";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
 
@@ -132,12 +133,21 @@ describe("gc soak: lost-owner reclamation loop", () => {
         const row = getWorkspaceById(ctx.db, ws.id);
         expect(row?.status).toBe("CLEANED");
 
-        // No orphan worktree registration remains in the mirror.
+        // No orphan worktree registration remains in the mirror. Compare
+        // canonicalized: registry paths may hold 8.3 aliases (short TMP env
+        // on CI) while porcelain emits the on-disk long form.
         const cacheRow = getRepositoryCacheByUrl(ctx.db, ctx.repo);
         expect(cacheRow).toBeDefined();
         const listed = git(cacheRow!.mirror_path, "worktree", "list", "--porcelain");
-        const porcelainPath = ws.path.replace(/\\/g, "/");
-        expect(listed.toLowerCase().includes(porcelainPath.toLowerCase())).toBe(false);
+        const stillRegistered = listed
+          .split("\n")
+          .filter((line) => line.startsWith("worktree "))
+          .some(
+            (line) =>
+              canonicalizePath(line.slice("worktree ".length).trim()) ===
+              canonicalizePath(ws.path),
+          );
+        expect(stillRegistered).toBe(false);
 
         // Journal and idempotency rows preserved.
         const journal = ctx.db

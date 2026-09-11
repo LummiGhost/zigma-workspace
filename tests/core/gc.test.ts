@@ -19,6 +19,7 @@ import {
 } from "../../src/db/queries.js";
 import { lockWorkspace } from "../../src/core/lock.js";
 import { acquireIntegrationLock } from "../../src/core/integration-lock.js";
+import { canonicalizePath } from "../../src/git/index.js";
 import type Database from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
 
@@ -298,7 +299,11 @@ describe("gc apply", () => {
     expect(result.results.some((r) => r.workspaceId === blocked.id)).toBe(false);
     expect(fs.existsSync(blocked.path)).toBe(true);
 
-    const orphan = result.orphanWorktrees.find((o) => o.path === orphanPath);
+    // Path forms differ on Windows: registry rows may hold 8.3 aliases
+    // (short TMP env on CI) while porcelain/realpath emit the long form.
+    const orphan = result.orphanWorktrees.find(
+      (o) => canonicalizePath(o.path) === canonicalizePath(orphanPath),
+    );
     expect(orphan).toBeDefined();
     expect(orphan?.removed).toBe(true);
     expect(fs.existsSync(orphanPath)).toBe(false);
