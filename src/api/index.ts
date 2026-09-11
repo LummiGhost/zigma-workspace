@@ -60,6 +60,15 @@ export {
   planGarbageCollection,
   garbageCollect,
 } from "../core/gc.js";
+export {
+  EXPECTED_PROVIDER,
+  MANAGED_REQUIRED_CAPABILITIES,
+  validateProviderContract,
+} from "../core/negotiation.js";
+export type {
+  ProviderContractInfo,
+  NegotiationResult,
+} from "../core/negotiation.js";
 
 // Flow-oriented aliases matching the zigma-flow WorkspaceProvider port.
 export {

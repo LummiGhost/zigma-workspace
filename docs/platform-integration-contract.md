@@ -125,7 +125,20 @@ snake_case 命名：
     "workspace-prepare-job-v1",
     "workspace-commit-v1",
     "workspace-integrate-v1",
-    "workspace-publish-v1"
+    "workspace-publish-v1",
+    "workspace-gc-v1"
+  ],
+  "managed_supported": true,
+  "managed_required_capabilities": [
+    "workspace-prepare-run-v1",
+    "workspace-prepare-job-v1",
+    "workspace-commit-v1",
+    "workspace-integrate-v1",
+    "workspace-publish-v1",
+    "workspace-strict-cleanup-v1",
+    "workspace-reconcile-v1",
+    "workspace-heartbeat-v1",
+    "workspace-cleanup-v1"
   ]
 }
 ```
@@ -134,6 +147,13 @@ snake_case 命名：
 能力名视为稳定标识：未知主契约版本或缺少所需 capability 时，必须在 create、
 bind-run、diff、snapshot、cleanup 之前 fail closed。新增 V1 可选能力不应使旧
 调用方失败。
+
+`managed_supported` 与 `managed_required_capabilities` 是 V1 可选字段，
+服务于托管（managed）Run/Job 生命周期协商：`managed_supported` 为 `true`
+表示完整托管能力集可用；字段缺失（旧版 CLI）或显式 `false` 一律视为
+不支持。消费者不得在本地硬编码托管能力列表——以
+`managed_required_capabilities` 为唯一事实来源，防止列表分叉。等价校验可
+通过 `negotiate --role managed --json` 一次完成（§13）。
 
 ### 3.2 Run/Job attempt 生命周期（M3.3）
 
@@ -175,6 +195,21 @@ Flow 按以下顺序消费 provider 操作：
 
 `commit`/`integrate`/`publish` 与 `prepare-run`/`prepare-job` 同样要求
 operation id 和规范化输入；输入哈希变化触发 `OPERATION_ID_CONFLICT`。
+
+崩溃恢复（adoption）与 journal 语义：
+
+- workspace 已创建但 operation 未完成（journal 行仍为 `started`、幂等记录
+  缺失，例如进程在 worktree 创建后、journal 完成前崩溃）时，重试同一
+  operation id 采用既有 workspace：复用该 journal 行并推进为 `completed`，
+  随后写入幂等记录；envelope 与首次成功逐字节一致。
+- 全新 operation id 同样确定性地采用已拥有该分支的 workspace（不创建第二
+  个），仅 journal 行不同。调用方可以安全地无限重试。
+- adoption 时 CAS 仍然生效：`prepare-run` 的 `expected_base` 与 manifest
+  创建基线（不可读时回退 registry 的 `base_commit`）比较，
+  `prepare-job` 的 `expected_run_head` 与既有 attempt workspace 的
+  `base_commit` 比较，不一致抛 `WORKSPACE_HEAD_CONFLICT`。
+- `reconcile` 会把 `started` 的 journal 行报告为 `incomplete`；这是取消
+  或崩溃后主机判断“需要恢复/清理”的依据（§8 序列）。
 
 ## 4. 标识、路径和产物
 
@@ -402,7 +437,7 @@ Capability：`workspace-gc-v1`。命令 `gc --json`（默认 dry-run，零副作
 
 | 类别 | 错误码 | 默认策略 |
 | --- | --- | --- |
-| 输入/版本 | `INVALID_INPUT`, unknown contract version | 不重试，修正调用方 |
+| 输入/版本 | `INVALID_INPUT`, `PROVIDER_MISMATCH`, `CONTRACT_VERSION_UNSUPPORTED`, `MANAGED_CAPABILITIES_MISSING`, unknown contract version | 不重试，修正调用方 |
 | 不存在 | `WORKSPACE_NOT_FOUND`, `WORKSPACE_DIRECTORY_NOT_FOUND` | reconcile 后决定恢复或清理 registry |
 | 幂等冲突 | `OPERATION_ID_CONFLICT` | 不重试，调查 id 复用 |
 | 并发冲突 | `WORKSPACE_LOCK_CONFLICT`, `WORKSPACE_STATE_CONFLICT`, `WORKSPACE_HEAD_CONFLICT` | 退避、刷新状态、复用原 operation id |
@@ -441,16 +476,63 @@ Capability：`workspace-gc-v1`。命令 `gc --json`（默认 dry-run，零副作
 - `tests/cli/json-contract.test.ts`：真实 CLI stdout envelope、artifact、operation-id、
   heartbeat、reconcile、integration lock、strict cleanup，以及
   prepare/commit/integrate/publish 完整生命周期和冲突 envelope 黑盒契约。
+- `tests/consumer/negotiation.test.ts`：协商模块单元（provider/版本/能力
+  fail-closed）加真实 CLI 的 `negotiate`/`contract-info` 黑盒契约。
+- `tests/consumer/managed-lifecycle.test.ts`：consumer 进程黑盒（M3.5）——
+  只通过已构建的 `dist/cli/index.js` 跨 spawn 边界驱动
+  handshake → prepare-run → 并发 prepare-job + 回放 → commit CAS →
+  串行 integrate（含冲突 envelope 与幂等重放）→ publish → reconcile →
+  strict cleanup；崩溃恢复 adoption 与 journal 转换；stale-CAS 与输入
+  校验；同 cwd 路径断言。
+- `tests/consumer/cancellation-soak.test.ts`：§8 取消序列的 consumer 进程
+  黑盒——子进程持有 job workspace 内文件句柄 → SIGKILL → 轮询句柄释放
+  （Windows 容忍）→ 停心跳/释放锁 → reconcile 报告 incomplete →
+  strict cleanup 成功，registry、journal、幂等、事件审计全部保留。
 
 仍需关闭的契约缺口：
 
-1. 为 Core adapter 建立独立 consumer 进程的
-   黑盒契约测试（当前 CLI 生命周期测试仍运行在同一仓库的测试进程内）。
+1. ~~为 Core adapter 建立独立 consumer 进程的黑盒契约测试~~ **已关闭
+   （M3.5）**：`tests/consumer/*` 只通过 built dist 跨 spawn 边界运行，
+   provider 代码不在测试进程内；Core 侧由 `run-m3-cross-repo-contracts`
+   编排真实 Flow + workspace 全链路（见兼容矩阵）。
 2. 统一 README、CLI 和 API 的状态名，淘汰旧的小写展示语义。
 3. 对 workspace root、junction/symlink 和 Windows 大小写路径增加逃逸测试。
-4. 增加取消后“子进程退出 -> 句柄释放 -> reconcile -> strict cleanup”的长时
-   soak test。
+4. ~~增加取消后“子进程退出 -> 句柄释放 -> reconcile -> strict cleanup”的
+   长时 soak test~~ **已关闭（M3.5）**：
+   `tests/consumer/cancellation-soak.test.ts` 在 workspace CI（含
+   Windows）始终运行。
 5. 为跨宿主 artifact URI 增加持久化 store；在此之前 `file:` 仅限本机。
 
 这些缺口不削弱本文对当前行为的描述；它们限制的是哪些能力可以在 M0 后立即
 作为稳定跨进程协议使用。
+
+## 13. 托管模式协商与兼容矩阵（M3.5）
+
+Flow 以 CLI 子进程方式消费 provider，因此托管桥接（bridge）构造在 Flow
+进程内，通过环境变量 `ZIGMA_WORKSPACE_CLI_PATH` 指向 workspace CLI，
+`ZIGMA_WORKSPACE_STATE_DIR` 指定状态目录。托管协商规则：
+
+1. 激活前 bridge 必须运行 `contract-info --json`（或等价的
+   `negotiate --role managed --json`），并满足：
+   `contract_version === 1`、`provider === "zigma-workspace"`、
+   `managed_supported === true`、`managed_required_capabilities` 全部
+   出现在 `capabilities` 中。
+2. `managed_supported` 字段缺失（旧版 CLI）或为 `false` 一律 fail closed。
+   bridge 不在本地硬编码能力列表——列表只来自 provider 响应，因此两侧
+   能力集不可能分叉。
+3. **禁止静默降级**：协商失败时 bridge 抛出类型化错误，托管工作流按既有
+   fail-closed 路径结束；把托管作业静默降级为 external/directory 模式会
+   破坏隔离性，属于契约违规。
+4. operation id 命名空间：bridge 使用 `run:<runId>:create` 与
+   `run:<runId>:job:<jobId>:attempt:<n>:create`（及同名尾缀的
+   commit/integrate/publish/cleanup），与 Core 的 create/apply id 和
+   `gc:` 前缀互不冲突。
+5. 同 cwd 契约：prepare-run/prepare-job envelope 的 `path` 必须是绝对路径
+   且在响应时真实存在；相同 operation id 回放返回逐字节一致的 envelope；
+   adoption 返回完全相同的 path。
+6. 取消序列（§8）：宿主死亡后按“子进程退出 → 句柄释放 → 停心跳/释放锁 →
+   reconcile（incomplete）→ strict cleanup”处理；审计数据保留。
+
+消费者 × provider 兼容矩阵见 `docs/compatibility-matrix.md`；跨仓库证据由
+zigma-core 的 `npm run test:m3-cross-repo` 编排（构建 flow + workspace、
+运行协商、执行 env-gated 真实 CLI 测试），其通过输出即矩阵中的 CI 证据。

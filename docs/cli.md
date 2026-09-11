@@ -92,7 +92,20 @@ zigma-workspace contract-info --json
     "workspace-prepare-job-v1",
     "workspace-commit-v1",
     "workspace-integrate-v1",
-    "workspace-publish-v1"
+    "workspace-publish-v1",
+    "workspace-gc-v1"
+  ],
+  "managed_supported": true,
+  "managed_required_capabilities": [
+    "workspace-prepare-run-v1",
+    "workspace-prepare-job-v1",
+    "workspace-commit-v1",
+    "workspace-integrate-v1",
+    "workspace-publish-v1",
+    "workspace-strict-cleanup-v1",
+    "workspace-reconcile-v1",
+    "workspace-heartbeat-v1",
+    "workspace-cleanup-v1"
   ]
 }
 ```
@@ -100,6 +113,52 @@ zigma-workspace contract-info --json
 `capabilities` 是稳定的 provider 能力标识；Core 必须先校验 envelope 的
 `contract_version` 和所需能力，再调用会产生副作用的命令。未知主契约版本或
 缺少所需能力时必须 fail closed。
+
+`managed_supported` 与 `managed_required_capabilities` 是契约版本 1 的可选
+新增字段，服务于 Flow 的托管 Run/Job 生命周期协商：`managed_supported`
+为 `true` 表示 provider 具备完整托管能力集；字段缺失（旧版 CLI）视为
+不支持，托管调用方必须 fail closed。调用方不得在本地硬编码能力列表——
+以 `managed_required_capabilities` 为唯一事实来源，防止列表分叉。
+
+### `negotiate`
+
+托管消费者可以用一次调用完成整份契约校验（等价于手工执行
+`contract-info` 并校验 version/provider/能力）：
+
+```powershell
+zigma-workspace negotiate --role managed --json
+```
+
+成功响应 `data` 为：
+
+```json
+{
+  "role": "managed",
+  "provider": "zigma-workspace",
+  "contract_version": 1,
+  "package_version": "0.1.5",
+  "supported": true,
+  "required_capabilities": ["workspace-prepare-run-v1", "...", "workspace-cleanup-v1"],
+  "capabilities": ["workspace-create-v1", "...", "workspace-gc-v1"]
+}
+```
+
+不支持的 `--role` 输出 `ok: false` error envelope（`INVALID_INPUT`）并以
+退出码 1 结束。CLI 校验的是自身 `contract-info` 的输出，因此 provider
+不符、版本不符或能力缺失在 CLI 路径上不可达；这三个错误码
+（`PROVIDER_MISMATCH` / `CONTRACT_VERSION_UNSUPPORTED` /
+`MANAGED_CAPABILITIES_MISSING`）由校验模块对消费者传入的外部 contract
+对象抛出。该命令与 `contract-info` 一样不产生任何副作用，也不需要 state
+directory。
+
+同一校验逻辑以生产模块 `src/core/negotiation.ts` 导出
+（`validateProviderContract`、`MANAGED_REQUIRED_CAPABILITIES`、
+`EXPECTED_PROVIDER`），CLI 与 in-process 库共享。
+
+消费者进程黑盒契约测试位于 `tests/consumer/`：测试扮演外部消费者，只通过
+`dist/cli/index.js` 的 spawn 边界调用已构建产物，provider 代码从不在
+consumer 测试进程内运行；`beforeAll` 会在产物缺失或源码更新时自动构建
+dist。
 
 ### 稳定错误码
 
