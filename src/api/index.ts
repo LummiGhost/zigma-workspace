@@ -54,6 +54,12 @@ export { integrateWorkspace, abortIntegration } from "../core/integrate.js";
 export { publishWorkspace } from "../core/publish.js";
 export { reconcileWorkspace } from "../core/reconcile.js";
 export { prepareRun, prepareJob } from "../core/provider.js";
+export {
+  ABANDON_DAYS,
+  sweepExpiredLocks,
+  planGarbageCollection,
+  garbageCollect,
+} from "../core/gc.js";
 
 // Flow-oriented aliases matching the zigma-flow WorkspaceProvider port.
 export {
@@ -162,6 +168,15 @@ export type {
   ReconciledStatus,
   CleanupWorkspaceStrictInput,
   CleanupWorkspaceStrictResult,
+  GcCandidateClass,
+  GcLockSweepResult,
+  GcReconcileSummary,
+  GcPlanItem,
+  GcOrphanItem,
+  GcPlanResult,
+  GcApplyItem,
+  GcApplyResult,
+  GarbageCollectResult,
   IntegrationLock,
   IntegrationLockRow,
   OperationJournalRow,

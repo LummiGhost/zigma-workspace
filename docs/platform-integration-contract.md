@@ -338,6 +338,10 @@ Workspace 没有权终止 Flow 或宿主子进程。取消协议为：
 workspace 已停止写入或已完成清理。Windows 上还必须等待子进程释放文件句柄，
 否则 strict cleanup 返回 blocker，并保持非 `CLEANED` 状态。
 
+6. 周期性执行 `gc`（先 plan，确认后 apply）作为所有权与保留的收口步骤：
+   sweep 过期锁、按保留策略回收 abandoned/failed workspace、reclaim 孤儿
+   worktree。见 §9.3。
+
 ## 9. 清理语义
 
 ### 9.1 当前基础 CLI
@@ -366,6 +370,30 @@ workspace 已停止写入或已完成清理。Windows 上还必须等待子进�
 修复 blocker 后如需重新执行删除，应使用新的 operation id；原 operation id 始终重放首次结果。
 
 基础 `cleanup` 暂为兼容路径；平台编排器必须协商并使用 strict capability。
+
+### 9.3 垃圾回收（gc）
+
+Capability：`workspace-gc-v1`。命令 `gc --json`（默认 dry-run，零副作用）与
+`gc --apply --json`。职责范围是回收，不覆盖取消/恢复协议（§8）。
+
+语义：
+
+- 资格分类：`ARCHIVED`/`CLEANED` → `never`；有 active 协作锁或未过期
+  integration lock → `blocked`（永不打扰）；`FAILED`/`CONFLICT` 超过
+  `retainFailedDays` → `failed`；`CLEANUP_FAILED` 且有历史 `gc:` 尝试 →
+  无条件重试；非终态超过 14 天（硬编码 `ABANDON_DAYS`）且无锁 → `abandoned`。
+- `--apply` 先 sweep 过期锁行（`expires_at <= now`），再逐候选重新读取、
+  重新评估、reconcile、strict-clean（`force: false`）；评估后出现新锁 →
+  `skipped ("lock_conflict")`。孤儿 worktree（git 注册但 registry 无记录）
+  一并 reclaim；孤儿没有 journal 行（按定义 registry 无记录）。
+- 证据保留：registry 行、operation journal、幂等记录、事件全部保留；只删除
+  目录与 worktree registration。
+- operation id 确定性生成 `gc:<workspaceId>:cleanup`，失败尝试追加 `:<n>`
+  后缀，重试是真实执行；`gc:` 前缀不会与 Flow 的 UUID operation id 冲突。
+- 并发：同一时间只运行一个 `gc`（better-sqlite3 串行化；文档约定）。
+
+编排器建议周期：定期（如每小时）`gc --json` 计划 → 按策略决定 → `gc --apply
+--json` 执行；执行后核对 `results`/`orphan_worktrees` 与 reconcile。
 
 ## 10. 错误分类和重试策略
 

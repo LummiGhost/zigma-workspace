@@ -306,6 +306,27 @@ zigma-workspace cleanup --workspace <id> [--operation-id <id>] [--strict] [--for
 
 重要：只有文件系统删除成功时，当前实现才把数据库状态更新为 `cleaned`。自动化调用方仍必须检查返回的 `removed` 和 `message`，不能只检查进程退出码；跨进程恢复和严格清理语义见[平台集成契约](platform-integration-contract.md)。
 
+## `gc`
+
+按保留策略批量回收：默认 dry-run 输出回收计划（零副作用），`--apply` 执行。
+
+```text
+zigma-workspace gc [--apply] [--json]
+```
+
+每个 workspace 的资格分类（`class` 字段）：
+
+- `ARCHIVED` / `CLEANED` → `never`，永不回收
+- 存在有效协作锁或未过期 integration lock → `blocked`，跳过（永不打扰）
+- `FAILED` / `CONFLICT` 且 `updated_at` 超过 `retainFailedDays`（默认 7 天）→ `failed`，回收
+- `CLEANUP_FAILED` 且有历史 `gc:` 前缀 journal 记录 → 无条件重试回收（不论年龄）
+- 非终态状态（`CREATED`…`MERGED`）超过 14 天且无锁 → `abandoned`，回收（14 天为硬编码 `ABANDON_DAYS`，唯一可配置保留旋钮是 `retainFailedDays`）
+- 其余 → `active` / `retained` / `unclassified`，跳过
+
+`--apply` 的执行顺序：先 sweep 所有已过期的 `workspace_locks` / `integration_locks` 行（dry-run 只报告将删除的数量），再对每个候选重新读取并重新评估（评估后出现新锁 → `skipped`），随后 `reconcile` + strict-clean（内部锁复检为最后防线，`force: false`）。回收只删除目录与 Git worktree registration；registry 行、operation journal、幂等记录和事件全部保留作为审计证据。git 中注册但 registry 无记录的孤儿 worktree 一并 reclaim 并在 `orphan_worktrees` 中报告。
+
+operation id 确定性生成：`gc:<workspaceId>:cleanup`；每次失败尝试追加 `:<n>` 后缀（n 为该 workspace 的 `gc:` 前缀 journal 行数），因此重试是真实执行而不是幂等回放，`gc:` 前缀不会与 Flow 的 UUID operation id 冲突。同一时间只应有一个 `gc` 进程运行。
+
 ## 状态与持久化
 
 CLI 使用 `--state-dir` 选项或 `ZIGMA_WORKSPACE_STATE_DIR` 环境变量指定状态根目录，均未设置时使用 `~/.zigma-workspace`。首次运行任何业务命令都会创建目录、`config.json` 和 SQLite schema（含幂等记录表 `workspace_idempotency`）。

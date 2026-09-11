@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
@@ -17,7 +18,7 @@ import {
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
@@ -121,6 +122,7 @@ export interface OrphanWorktreeInfo {
   branch: string;
   commit: string;
   registeredWorkspaceId?: string;
+  mirrorPath: string;
 }
 
 /**
@@ -133,11 +135,20 @@ export function detectOrphanWorktrees(
 ): OrphanWorktreeInfo[] {
   const workspaceRows = listWorkspaces(db);
 
+  // git porcelain emits forward-slash paths while registry rows use the
+  // platform separator; normalize both sides (case-insensitively on
+  // Windows) so registered workspaces and the mirror itself are not
+  // misclassified as orphans.
+  const normalize = (value: string): string => {
+    const resolved = path.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+
   // Build a set of known workspace paths
   const knownPaths = new Set(
     workspaceRows
       .filter((r) => r.status !== "CLEANED")
-      .map((r) => r.path)
+      .map((r) => normalize(r.path))
   );
 
   // Get all unique mirror paths
@@ -158,18 +169,20 @@ export function detectOrphanWorktrees(
     const worktrees = listWorktrees(mirrorPath);
     for (const wt of worktrees) {
       // Skip the mirror itself (it shows as a worktree)
-      if (wt.path === mirrorPath) continue;
+      if (normalize(wt.path) === normalize(mirrorPath)) continue;
 
-      if (!knownPaths.has(wt.path)) {
+      if (!knownPaths.has(normalize(wt.path))) {
         // This worktree is not in the registry
         const registeredWorkspace = workspaceRows.find(
-          (r) => r.path === wt.path
+          (r) => normalize(r.path) === normalize(wt.path)
         );
         orphans.push({
-          path: wt.path,
+          // Report host-native paths (git porcelain emits forward slashes).
+          path: path.normalize(wt.path),
           branch: wt.branch,
           commit: wt.commit,
           registeredWorkspaceId: registeredWorkspace?.id,
+          mirrorPath,
         });
       }
     }
@@ -253,7 +266,7 @@ export function cleanupWorkspaceStrict(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   const workspacePath = row.path;
   const blockers: string[] = [];

@@ -20,6 +20,7 @@ import { collectDiff } from "../core/diff.js";
 import { createSnapshot } from "../core/snapshot.js";
 import { getArtifactsForSnapshot } from "../core/artifact.js";
 import { cleanupWorkspace, cleanupWorkspaceStrict } from "../core/cleanup.js";
+import { garbageCollect } from "../core/gc.js";
 import { reconcileWorkspace } from "../core/reconcile.js";
 import { prepareRun, prepareJob } from "../core/provider.js";
 import { commitWorkspace } from "../core/commit.js";
@@ -36,7 +37,7 @@ import { validateDefinition } from "../schema/validator.js";
 import type { WorkspaceDefinition } from "../schema/definition.js";
 import { CONTRACT_VERSION, ZigmaError } from "../types/index.js";
 import { GitError } from "../git/index.js";
-import type { Workspace, ZigmaErrorCode } from "../types/index.js";
+import type { Workspace, ZigmaErrorCode, GarbageCollectResult } from "../types/index.js";
 import type Database from "better-sqlite3";
 import { getCapacityStatus } from "../core/isolation-policy.js";
 
@@ -63,6 +64,7 @@ const WORKSPACE_CAPABILITIES = [
   "workspace-commit-v1",
   "workspace-integrate-v1",
   "workspace-publish-v1",
+  "workspace-gc-v1",
 ] as const;
 
 // ── Output helpers ──────────────────────────────────────────────────────────
@@ -804,6 +806,94 @@ program
       }
     }
   );
+
+// ── gc ───────────────────────────────────────────────────────────────────────
+
+function formatGcEnvelope(result: GarbageCollectResult): Record<string, unknown> {
+  const sweptLocks = {
+    workspace_locks_deleted: result.sweptLocks.workspaceLocksDeleted,
+    integration_locks_deleted: result.sweptLocks.integrationLocksDeleted,
+    workspace_ids: result.sweptLocks.workspaceIds,
+  };
+  const orphans = result.orphanWorktrees.map((o) => ({
+    path: o.path,
+    branch: o.branch,
+    commit: o.commit,
+    ...(o.registeredWorkspaceId !== undefined
+      ? { registered_workspace_id: o.registeredWorkspaceId }
+      : {}),
+    mirror_path: o.mirrorPath,
+    ...(o.removed !== undefined ? { removed: o.removed } : {}),
+    ...(o.blockers !== undefined ? { blockers: o.blockers } : {}),
+  }));
+  if (!result.applied) {
+    return {
+      applied: false,
+      swept_locks: sweptLocks,
+      candidates: result.candidates.map((c) => ({
+        workspace_id: c.workspaceId,
+        status: c.status,
+        class: c.class,
+        action: c.action,
+        reason: c.reason,
+        age_days: c.ageDays,
+        updated_at: c.updatedAt,
+        ...(c.reconcile !== undefined
+          ? {
+              reconcile: {
+                reconciled_status: c.reconcile.reconciledStatus,
+                directory_exists: c.reconcile.directoryExists,
+                recommendation: c.reconcile.recommendation,
+              },
+            }
+          : {}),
+      })),
+      orphan_worktrees: orphans,
+    };
+  }
+  return {
+    applied: true,
+    swept_locks: sweptLocks,
+    results: result.results.map((r) => ({
+      workspace_id: r.workspaceId,
+      action: r.action,
+      ...(r.reason !== undefined ? { reason: r.reason } : {}),
+      ...(r.operationId !== undefined ? { operation_id: r.operationId } : {}),
+      ...(r.removed !== undefined ? { removed: r.removed } : {}),
+      ...(r.status !== undefined ? { status: r.status } : {}),
+      ...(r.blockers !== undefined ? { blockers: r.blockers } : {}),
+      ...(r.reconciledStatus !== undefined
+        ? { reconciled_status: r.reconciledStatus }
+        : {}),
+    })),
+    orphan_worktrees: orphans,
+  };
+}
+
+program
+  .command("gc")
+  .description(
+    "Plan or execute retention-driven garbage collection (dry-run by default)"
+  )
+  .option(
+    "--apply",
+    "Execute the collection plan: sweep expired locks, strict-clean eligible workspaces, reclaim orphan worktrees"
+  )
+  .option("--json", "Output JSON")
+  .action((opts: { apply?: boolean; json?: boolean }) => {
+    const useJson = opts.json ?? false;
+    try {
+      const { config, db } = setup(program.opts<{ stateDir?: string }>().stateDir);
+      const result = garbageCollect(db, config, { apply: opts.apply ?? false });
+      if (useJson) {
+        outputOk(formatGcEnvelope(result), true);
+      } else {
+        console.log(formatHuman(formatGcEnvelope(result)));
+      }
+    } catch (err) {
+      catchError(err, useJson);
+    }
+  });
 
 // ── governed lifecycle provider operations ──────────────────────────────────
 

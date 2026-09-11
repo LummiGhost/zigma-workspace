@@ -8,7 +8,7 @@
  *
  * All tests use real git and filesystem — no mocks.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -19,6 +19,7 @@ import { closeDb, openDb } from "../../src/db/index.js";
 import { createWorkspace, getWorkspace } from "../../src/core/workspace.js";
 import { commitWorkspace } from "../../src/core/commit.js";
 import { cleanupWorkspaceStrict } from "../../src/core/cleanup.js";
+import { garbageCollect } from "../../src/core/gc.js";
 import { getHeadCommit } from "../../src/git/index.js";
 import type { Database } from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
@@ -239,6 +240,98 @@ describe("Windows file locking during cleanup", () => {
         try { fs.rmSync(ws.path, { recursive: true, force: true }); } catch { /* ok */ }
       }
     }
+  });
+});
+
+// ── GC Retry After Cleanup Failure ──────────────────────────────────────────
+
+/**
+ * Node opens files with FILE_SHARE_DELETE (libuv), so an open file handle does
+ * not block deletion on Windows. A directory that is another process's current
+ * directory, however, cannot be deleted at all — a deterministic blocker.
+ */
+function holdDirectoryAsCwd(dir: string, readyFile: string): ChildProcess {
+  const script = [
+    `process.chdir(${JSON.stringify(dir)});`,
+    `require("fs").writeFileSync(${JSON.stringify(readyFile)}, "ready");`,
+    `setInterval(() => {}, 1000);`,
+  ].join("");
+  const child = spawn(process.execPath, ["-e", script], { stdio: "ignore" });
+  const sleep = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  const deadline = Date.now() + 10_000;
+  while (!fs.existsSync(readyFile)) {
+    if (Date.now() > deadline) {
+      child.kill();
+      throw new Error("cwd holder did not become ready");
+    }
+    sleep();
+  }
+  return child;
+}
+
+function waitForExit(child: ChildProcess, timeoutMs = 10_000): void {
+  const sleep = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(child.pid!, 0);
+      sleep();
+    } catch {
+      return;
+    }
+  }
+  throw new Error("cwd holder did not exit");
+}
+
+describe.skipIf(!isWindows)("gc retry after a blocked cleanup (Windows cwd holder)", () => {
+  it("apply fails with blockers, then retries with a suffixed operation id to CLEANED", () => {
+    const ctx = setupRepo();
+    const ws = makeWorkspace(ctx, "gc-retry-window");
+
+    // Abandon the workspace: updated_at older than ABANDON_DAYS.
+    const past = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    ctx.db.prepare("UPDATE workspaces SET updated_at = ? WHERE id = ?").run(past, ws.id);
+
+    // Hold the workspace directory as a child process's CWD: Windows cannot
+    // delete a process's current directory.
+    const readyFile = path.join(ctx.root, "cwd-holder-ready");
+    const child = holdDirectoryAsCwd(ws.path, readyFile);
+
+    try {
+      const first = garbageCollect(ctx.db, ctx.config, { apply: true });
+      expect(first.applied).toBe(true);
+      if (!first.applied) throw new Error("expected apply result");
+      const firstItem = first.results.find((r) => r.workspaceId === ws.id);
+      expect(firstItem?.action).toBe("cleanup_failed");
+      expect(firstItem?.status).toBe("CLEANUP_FAILED");
+      expect(firstItem?.blockers?.length).toBeGreaterThan(0);
+      expect(firstItem?.operationId).toBe(`gc:${ws.id}:cleanup`);
+      expect(getWorkspace(ctx.db, ws.id).status).toBe("CLEANUP_FAILED");
+    } finally {
+      child.kill();
+      waitForExit(child);
+    }
+
+    // Directory released: the next gc attempt advances the operation id suffix.
+    const second = garbageCollect(ctx.db, ctx.config, { apply: true });
+    expect(second.applied).toBe(true);
+    if (!second.applied) throw new Error("expected apply result");
+    const secondItem = second.results.find((r) => r.workspaceId === ws.id);
+    expect(secondItem?.action).toBe("cleaned");
+    expect(secondItem?.operationId).toBe(`gc:${ws.id}:cleanup:1`);
+    expect(secondItem?.status).toBe("CLEANED");
+    expect(fs.existsSync(ws.path)).toBe(false);
+
+    // Both attempts are preserved as audit evidence.
+    const journal = ctx.db
+      .prepare(
+        "SELECT operation_id FROM operation_journal WHERE workspace_id = ? AND operation_id LIKE 'gc:%' ORDER BY created_at",
+      )
+      .all(ws.id) as Array<{ operation_id: string }>;
+    expect(journal.map((r) => r.operation_id)).toEqual([
+      `gc:${ws.id}:cleanup`,
+      `gc:${ws.id}:cleanup:1`,
+    ]);
   });
 });
 
