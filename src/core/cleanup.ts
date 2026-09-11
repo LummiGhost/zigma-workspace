@@ -23,7 +23,7 @@ import {
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
 import { transition } from "./state-machine.js";
-import { isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
+import { canonicalizePath, isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 import { assertWorkspaceRootBoundary } from "./isolation-policy.js";
 
@@ -135,20 +135,15 @@ export function detectOrphanWorktrees(
 ): OrphanWorktreeInfo[] {
   const workspaceRows = listWorkspaces(db);
 
-  // git porcelain emits forward-slash paths while registry rows use the
-  // platform separator; normalize both sides (case-insensitively on
-  // Windows) so registered workspaces and the mirror itself are not
+  // git porcelain emits forward-slash paths, Windows 8.3 short-name
+  // aliases (RUNNER~1 vs runneradmin), and possibly different casing,
+  // while registry rows use the platform separator. Canonicalize both
+  // sides so registered workspaces and the mirror itself are not
   // misclassified as orphans.
-  const normalize = (value: string): string => {
-    const resolved = path.resolve(value);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
-
-  // Build a set of known workspace paths
   const knownPaths = new Set(
     workspaceRows
       .filter((r) => r.status !== "CLEANED")
-      .map((r) => normalize(r.path))
+      .map((r) => canonicalizePath(r.path))
   );
 
   // Get all unique mirror paths
@@ -169,12 +164,12 @@ export function detectOrphanWorktrees(
     const worktrees = listWorktrees(mirrorPath);
     for (const wt of worktrees) {
       // Skip the mirror itself (it shows as a worktree)
-      if (normalize(wt.path) === normalize(mirrorPath)) continue;
+      if (canonicalizePath(wt.path) === canonicalizePath(mirrorPath)) continue;
 
-      if (!knownPaths.has(normalize(wt.path))) {
+      if (!knownPaths.has(canonicalizePath(wt.path))) {
         // This worktree is not in the registry
         const registeredWorkspace = workspaceRows.find(
-          (r) => normalize(r.path) === normalize(wt.path)
+          (r) => canonicalizePath(r.path) === canonicalizePath(wt.path)
         );
         orphans.push({
           // Report host-native paths (git porcelain emits forward slashes).

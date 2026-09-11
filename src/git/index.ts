@@ -14,6 +14,25 @@ export class GitError extends Error {
   }
 }
 
+/**
+ * Canonicalize a filesystem path for comparison: resolves symlinks,
+ * junctions, and Windows 8.3 short-name aliases (e.g. RUNNER~1 vs
+ * runneradmin), which git porcelain output may emit. Falls back to
+ * lexical resolution when the path does not exist.
+ */
+export function canonicalizePath(value: string): string {
+  let resolved: string;
+  try {
+    // .native (GetFinalPathNameByHandle on Windows) expands 8.3 short-name
+    // aliases and junctions; the non-native variant returns the input
+    // unchanged when it is not a symlink, so RUNNER~1 stays RUNNER~1.
+    resolved = fs.realpathSync.native(value);
+  } catch {
+    resolved = path.resolve(value);
+  }
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function runGit(args: string[], cwd?: string, env?: NodeJS.ProcessEnv): string {
   const result = spawnSync("git", args, {
     cwd,
@@ -179,15 +198,11 @@ export function listWorktrees(
  */
 export function isWorktreeRegistered(mirrorPath: string, workspacePath: string): boolean {
   const output = runGit(["worktree", "list", "--porcelain"], mirrorPath);
-  const normalize = (value: string): string => {
-    const resolved = path.resolve(value);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
-  const expected = normalize(workspacePath);
+  const expected = canonicalizePath(workspacePath);
 
   return output.split("\n").some((line) => {
     if (!line.startsWith("worktree ")) return false;
-    return normalize(line.slice("worktree ".length).trim()) === expected;
+    return canonicalizePath(line.slice("worktree ".length).trim()) === expected;
   });
 }
 

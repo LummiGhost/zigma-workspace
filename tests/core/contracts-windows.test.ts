@@ -20,7 +20,7 @@ import { createWorkspace, getWorkspace } from "../../src/core/workspace.js";
 import { commitWorkspace } from "../../src/core/commit.js";
 import { cleanupWorkspaceStrict } from "../../src/core/cleanup.js";
 import { garbageCollect } from "../../src/core/gc.js";
-import { getHeadCommit } from "../../src/git/index.js";
+import { canonicalizePath, getHeadCommit } from "../../src/git/index.js";
 import type { Database } from "better-sqlite3";
 import type { ZigmaWorkspaceConfig } from "../../src/types/index.js";
 import { assertPathWithin, readAndValidateManifest } from "../../src/core/isolation-policy.js";
@@ -103,6 +103,36 @@ describe.skipIf(!isWindows)("Windows M3.2 path isolation", () => {
     expect(() => assertPathWithin(root, path.join(junction, "secret.txt"), "Changed path")).toThrow(
       expect.objectContaining({ code: "WORKSPACE_PATH_POLICY_VIOLATION" }),
     );
+  });
+
+  it("canonicalizePath expands junctions and 8.3 short-name aliases", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-canon-"));
+    tempDirs.push(root);
+    const real = path.join(root, "real-target-dir");
+    fs.mkdirSync(real, { recursive: true });
+
+    // Junction: resolves through the reparse point to the target.
+    const junction = path.join(root, "link");
+    fs.symlinkSync(real, junction, "junction");
+    expect(canonicalizePath(junction)).toBe(canonicalizePath(real));
+    expect(canonicalizePath(junction)).not.toBe(path.resolve(junction).toLowerCase());
+
+    // 8.3 short-name alias (e.g. RUNNER~1 vs runneradmin): only present when
+    // the volume generates short names; skip the assertion otherwise.
+    const short = execFileSync(
+      "powershell",
+      [
+        "-NoProfile",
+        "-Command",
+        `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${real}').ShortPath`,
+      ],
+      { encoding: "utf-8" },
+    ).trim();
+    if (short.toLowerCase() === real.toLowerCase()) {
+      return;
+    }
+    expect(short.toLowerCase()).not.toBe(real.toLowerCase());
+    expect(canonicalizePath(short)).toBe(canonicalizePath(real));
   });
 
   it("rejects case-fold aliases in manifest policy", () => {

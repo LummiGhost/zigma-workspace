@@ -26,7 +26,7 @@ import {
 } from "../db/queries.js";
 import { reconcileWorkspace } from "./reconcile.js";
 import { cleanupWorkspaceStrict, detectOrphanWorktrees } from "./cleanup.js";
-import { isWorktreeRegistered, removeWorktree } from "../git/index.js";
+import { canonicalizePath, isWorktreeRegistered, removeWorktree } from "../git/index.js";
 
 /**
  * Workspaces whose status is a non-terminal lifecycle state and whose
@@ -228,6 +228,12 @@ function removeOrphans(
 ): GcOrphanItem[] {
   const items: GcOrphanItem[] = [];
   for (const orphan of detectOrphanWorktrees(db, config)) {
+    // Defense in depth: a mirror misclassified as an orphan (e.g. via an
+    // unexpanded 8.3 alias or junction) must never be removed. Removing a
+    // repository mirror would be catastrophic and unrecoverable.
+    if (canonicalizePath(orphan.path) === canonicalizePath(orphan.mirrorPath)) {
+      continue;
+    }
     const item: GcOrphanItem = { ...orphan };
     const blockers: string[] = [];
     try {
