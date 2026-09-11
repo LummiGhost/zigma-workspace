@@ -591,3 +591,74 @@ export interface CleanupWorkspaceStrictResult {
   message: string;
   blockers?: string[];
 }
+
+// ── Garbage collection ───────────────────────────────────────────────────────
+
+export type GcCandidateClass =
+  | "failed"
+  | "abandoned"
+  | "blocked"
+  | "retained"
+  | "active"
+  | "never"
+  | "unclassified";
+
+export interface GcLockSweepResult {
+  workspaceLocksDeleted: number;
+  integrationLocksDeleted: number;
+  workspaceIds: string[];
+}
+
+export interface GcReconcileSummary {
+  reconciledStatus: ReconciledStatus;
+  directoryExists: boolean;
+  recommendation: string;
+}
+
+export interface GcPlanItem {
+  workspaceId: string;
+  status: string;
+  class: GcCandidateClass;
+  action: "cleanup" | "skip";
+  reason: string;
+  ageDays: number;
+  updatedAt: string;
+  reconcile?: GcReconcileSummary;
+}
+
+export interface GcOrphanItem {
+  path: string;
+  branch: string;
+  commit: string;
+  registeredWorkspaceId?: string;
+  mirrorPath: string;
+  removed?: boolean;
+  blockers?: string[];
+}
+
+export interface GcPlanResult {
+  applied: false;
+  sweptLocks: GcLockSweepResult;
+  candidates: GcPlanItem[];
+  orphanWorktrees: GcOrphanItem[];
+}
+
+export interface GcApplyItem {
+  workspaceId: string;
+  action: "cleaned" | "cleanup_failed" | "skipped";
+  reason?: string;
+  operationId?: string;
+  removed?: boolean;
+  status?: string;
+  blockers?: string[];
+  reconciledStatus?: string;
+}
+
+export interface GcApplyResult {
+  applied: true;
+  sweptLocks: GcLockSweepResult;
+  results: GcApplyItem[];
+  orphanWorktrees: GcOrphanItem[];
+}
+
+export type GarbageCollectResult = GcPlanResult | GcApplyResult;

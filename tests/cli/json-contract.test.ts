@@ -109,6 +109,7 @@ describe("Workspace CLI JSON V1 black-box contract", () => {
         "workspace-commit-v1",
         "workspace-integrate-v1",
         "workspace-publish-v1",
+        "workspace-gc-v1",
       ],
     });
     expect(fs.existsSync(stateDir)).toBe(false);

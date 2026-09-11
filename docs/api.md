@@ -560,6 +560,46 @@ interface CleanupWorkspaceStrictResult {
 
 严格清理：只有 worktree registration 和目录确认移除后才进入 CLEANED。删除或 registration 验证失败返回 CLEANUP_FAILED 和 blocker 列表；相同 operation id 稳定重放原结果。能诊断 Windows 文件占用。
 
+## GC API
+
+模块：`src/core/gc.ts`
+
+### `planGarbageCollection(db, config): GcPlanResult`
+
+零副作用的回收计划：候选分类、过期锁 sweep 的预期计数、孤儿 worktree 列表。不删除任何锁行、目录或 registration。
+
+### `garbageCollect(db, config, input): GcPlanResult | GcApplyResult`
+
+`input.apply = false` 时等价于 `planGarbageCollection`。`true` 时先 sweep 过期锁，再对每个 cleanup 候选重新评估并 strict-clean（`force: false`，评估后出现新锁 → `skipped`），最后 reclaim 孤儿 worktree。registry 行、journal、幂等记录和事件全部保留。
+
+```ts
+type GcCandidateClass =
+  | "failed" | "abandoned" | "blocked" | "retained"
+  | "active" | "never" | "unclassified";
+
+interface GcPlanResult {
+  applied: false;
+  sweptLocks: GcLockSweepResult;   // 预期将删除的计数
+  candidates: GcPlanItem[];        // class / action: "cleanup"|"skip" / reason / ageDays / reconcile?
+  orphanWorktrees: GcOrphanItem[];
+}
+
+interface GcApplyResult {
+  applied: true;
+  sweptLocks: GcLockSweepResult;   // 实际删除的计数 + workspaceIds
+  results: GcApplyItem[];          // action: "cleaned"|"cleanup_failed"|"skipped"
+  orphanWorktrees: GcOrphanItem[]; // 带 removed / blockers
+}
+```
+
+### `sweepExpiredLocks(db, nowIso): GcLockSweepResult`
+
+批量删除 `expires_at <= nowIso` 的 `workspace_locks` 与 `integration_locks` 行（跨全部 workspace），返回删除计数与涉及的 workspace ids。过期行对 expiry-filtered 读取器本就不可见，sweep 只回收所有权记录，不会打扰任何 active owner（heartbeat 使 live lease 保持在未来）。
+
+### `ABANDON_DAYS`
+
+非终态 workspace 被判定为 abandoned 的硬编码天数阈值（14）。唯一可配置保留旋钮是 config 的 `retainFailedDays`。
+
 ## Integration Lock API
 
 模块：`src/core/integration-lock.ts`

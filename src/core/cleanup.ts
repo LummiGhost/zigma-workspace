@@ -17,12 +17,12 @@ import {
 import {
   getIdempotencyRecord,
   insertIdempotencyRecord,
-  insertOperationJournal,
+  startOperationJournal,
   updateOperationJournalStatus,
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
 import { transition } from "./state-machine.js";
-import { isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
+import { canonicalizePath, isWorktreeRegistered, removeWorktree, listWorktrees, resolveRealPath } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 import { assertWorkspaceRootBoundary } from "./isolation-policy.js";
 
@@ -121,6 +121,7 @@ export interface OrphanWorktreeInfo {
   branch: string;
   commit: string;
   registeredWorkspaceId?: string;
+  mirrorPath: string;
 }
 
 /**
@@ -133,11 +134,15 @@ export function detectOrphanWorktrees(
 ): OrphanWorktreeInfo[] {
   const workspaceRows = listWorkspaces(db);
 
-  // Build a set of known workspace paths
+  // git porcelain emits forward-slash paths, Windows 8.3 short-name
+  // aliases (RUNNER~1 vs runneradmin), and possibly different casing,
+  // while registry rows use the platform separator. Canonicalize both
+  // sides so registered workspaces and the mirror itself are not
+  // misclassified as orphans.
   const knownPaths = new Set(
     workspaceRows
       .filter((r) => r.status !== "CLEANED")
-      .map((r) => r.path)
+      .map((r) => canonicalizePath(r.path))
   );
 
   // Get all unique mirror paths
@@ -158,18 +163,24 @@ export function detectOrphanWorktrees(
     const worktrees = listWorktrees(mirrorPath);
     for (const wt of worktrees) {
       // Skip the mirror itself (it shows as a worktree)
-      if (wt.path === mirrorPath) continue;
+      if (canonicalizePath(wt.path) === canonicalizePath(mirrorPath)) continue;
 
-      if (!knownPaths.has(wt.path)) {
+      if (!knownPaths.has(canonicalizePath(wt.path))) {
         // This worktree is not in the registry
         const registeredWorkspace = workspaceRows.find(
-          (r) => r.path === wt.path
+          (r) => canonicalizePath(r.path) === canonicalizePath(wt.path)
         );
         orphans.push({
-          path: wt.path,
+          // Report the on-disk long form that git porcelain resolves to, so
+          // consumers never see an 8.3 alias like RUNNER~1. Registry rows may
+          // themselves hold aliases when the host temp dir advertises one
+          // (short TMP env on CI), so consumers must compare paths
+          // canonically, never byte-for-byte.
+          path: resolveRealPath(wt.path),
           branch: wt.branch,
           commit: wt.commit,
           registeredWorkspaceId: registeredWorkspace?.id,
+          mirrorPath,
         });
       }
     }
@@ -253,7 +264,7 @@ export function cleanupWorkspaceStrict(
     created_at: ts,
     updated_at: ts,
   };
-  insertOperationJournal(db, journalRow);
+  startOperationJournal(db, journalRow);
 
   const workspacePath = row.path;
   const blockers: string[] = [];

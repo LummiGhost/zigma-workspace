@@ -185,6 +185,29 @@ export function deleteLockForWorkspace(
   db.prepare("DELETE FROM workspace_locks WHERE workspace_id = ?").run(workspaceId);
 }
 
+export function listExpiredWorkspaceLocks(
+  db: Database.Database,
+  expiredAt: string
+): WorkspaceLockRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM workspace_locks WHERE expires_at IS NOT NULL AND expires_at <= ? ORDER BY workspace_id ASC"
+    )
+    .all(expiredAt) as WorkspaceLockRow[];
+}
+
+export function deleteExpiredWorkspaceLocks(
+  db: Database.Database,
+  expiredAt: string
+): number {
+  const result = db
+    .prepare(
+      "DELETE FROM workspace_locks WHERE expires_at IS NOT NULL AND expires_at <= ?"
+    )
+    .run(expiredAt);
+  return result.changes;
+}
+
 // ── Workspace Snapshots ─────────────────────────────────────────────────────
 
 export function insertWorkspaceSnapshot(
@@ -370,6 +393,29 @@ export function deleteExpiredIntegrationLock(
   db.prepare(
     "DELETE FROM integration_locks WHERE workspace_id = ? AND expires_at IS NOT NULL AND expires_at <= ?"
   ).run(workspaceId, expiredAt);
+}
+
+export function listExpiredIntegrationLocks(
+  db: Database.Database,
+  expiredAt: string
+): IntegrationLockRow[] {
+  return db
+    .prepare(
+      "SELECT * FROM integration_locks WHERE expires_at IS NOT NULL AND expires_at <= ? ORDER BY workspace_id ASC"
+    )
+    .all(expiredAt) as IntegrationLockRow[];
+}
+
+export function deleteExpiredIntegrationLocks(
+  db: Database.Database,
+  expiredAt: string
+): number {
+  const result = db
+    .prepare(
+      "DELETE FROM integration_locks WHERE expires_at IS NOT NULL AND expires_at <= ?"
+    )
+    .run(expiredAt);
+  return result.changes;
 }
 
 export function updateIntegrationLockHeartbeat(
