@@ -323,7 +323,7 @@ zigma-workspace gc [--apply] [--json]
 - 非终态状态（`CREATED`…`MERGED`）超过 14 天且无锁 → `abandoned`，回收（14 天为硬编码 `ABANDON_DAYS`，唯一可配置保留旋钮是 `retainFailedDays`）
 - 其余 → `active` / `retained` / `unclassified`，跳过
 
-`--apply` 的执行顺序：先 sweep 所有已过期的 `workspace_locks` / `integration_locks` 行（dry-run 只报告将删除的数量），再对每个候选重新读取并重新评估（评估后出现新锁 → `skipped`），随后 `reconcile` + strict-clean（内部锁复检为最后防线，`force: false`）。回收只删除目录与 Git worktree registration；registry 行、operation journal、幂等记录和事件全部保留作为审计证据。git 中注册但 registry 无记录的孤儿 worktree 一并 reclaim 并在 `orphan_worktrees` 中报告。
+`--apply` 的执行顺序：先 sweep 所有已过期的 `workspace_locks` / `integration_locks` 行（dry-run 只报告将删除的数量），再对每个候选重新读取并重新评估（评估后出现新锁 → `skipped`），随后 `reconcile` + strict-clean（内部锁复检为最后防线，`force: false`）。回收只删除目录与 Git worktree registration；registry 行、operation journal、幂等记录和事件全部保留作为审计证据。git 中注册但 registry 无记录的孤儿 worktree 一并 reclaim 并在 `orphan_worktrees` 中报告；reclaim 仅限 `workspacesDir` 之内的路径，根目录之外注册的 worktree（如手工调试添加）只报告（`removed: false` + 策略违规 blocker），永不删除。
 
 operation id 确定性生成：`gc:<workspaceId>:cleanup`；每次失败尝试追加 `:<n>` 后缀（n 为该 workspace 的 `gc:` 前缀 journal 行数），因此重试是真实执行而不是幂等回放，`gc:` 前缀不会与 Flow 的 UUID operation id 冲突。同一时间只应有一个 `gc` 进程运行。
 

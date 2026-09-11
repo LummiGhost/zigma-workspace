@@ -385,7 +385,10 @@ Capability：`workspace-gc-v1`。命令 `gc --json`（默认 dry-run，零副作
 - `--apply` 先 sweep 过期锁行（`expires_at <= now`），再逐候选重新读取、
   重新评估、reconcile、strict-clean（`force: false`）；评估后出现新锁 →
   `skipped ("lock_conflict")`。孤儿 worktree（git 注册但 registry 无记录）
-  一并 reclaim；孤儿没有 journal 行（按定义 registry 无记录）。
+  一并 reclaim；孤儿没有 journal 行（按定义 registry 无记录）。reclaim 仅限
+  `workspacesDir` 之内的路径：注册在 mirror 上、但位于根目录之外的
+  worktree（如手工调试添加）只报告（`removed: false` + 策略违规 blocker），
+  永不删除。
 - 证据保留：registry 行、operation journal、幂等记录、事件全部保留；只删除
   目录与 worktree registration。
 - operation id 确定性生成 `gc:<workspaceId>:cleanup`，失败尝试追加 `:<n>`

@@ -27,6 +27,7 @@ import {
 import { reconcileWorkspace } from "./reconcile.js";
 import { cleanupWorkspaceStrict, detectOrphanWorktrees } from "./cleanup.js";
 import { canonicalizePath, isWorktreeRegistered, removeWorktree } from "../git/index.js";
+import { assertPathWithin } from "./isolation-policy.js";
 
 /**
  * Workspaces whose status is a non-terminal lifecycle state and whose
@@ -237,13 +238,18 @@ function removeOrphans(
     const item: GcOrphanItem = { ...orphan };
     const blockers: string[] = [];
     try {
+      // Only platform-owned paths are reclaimed. A worktree registered
+      // against the mirror from outside the workspaces root (e.g. added by
+      // hand during debugging) is not ours to delete.
+      assertPathWithin(config.workspacesDir, orphan.path, "Orphan worktree");
       removeWorktree(orphan.mirrorPath, orphan.path);
+      item.removed =
+        !fs.existsSync(orphan.path) &&
+        !isWorktreeRegistered(orphan.mirrorPath, orphan.path);
     } catch (err) {
       blockers.push(err instanceof Error ? err.message : String(err));
+      item.removed = false;
     }
-    item.removed =
-      !fs.existsSync(orphan.path) &&
-      !isWorktreeRegistered(orphan.mirrorPath, orphan.path);
     if (blockers.length > 0) {
       item.blockers = blockers;
     }

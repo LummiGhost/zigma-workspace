@@ -13,6 +13,7 @@ import {
   sweepExpiredLocks,
 } from "../../src/core/gc.js";
 import {
+  getRepositoryCacheByUrl,
   getWorkspaceById,
   insertOperationJournal,
   listExpiredWorkspaceLocks,
@@ -312,6 +313,29 @@ describe("gc apply", () => {
     expect(orphan).toBeDefined();
     expect(orphan?.removed).toBe(true);
     expect(fs.existsSync(orphanPath)).toBe(false);
+  });
+
+  it("reports but never removes orphan worktrees outside the workspaces root", () => {
+    const ctx = setupRepo();
+    makeWorkspace(ctx, "gc-boundary-source");
+    const cacheRow = getRepositoryCacheByUrl(ctx.db, ctx.repo);
+    expect(cacheRow).toBeDefined();
+    const outside = path.join(ctx.root, "outside-worktree");
+    git(cacheRow!.mirror_path, "worktree", "add", outside, "-b", "outside-branch");
+
+    const result = garbageCollect(ctx.db, ctx.config, { apply: true });
+    expect(result.applied).toBe(true);
+    if (!result.applied) throw new Error("expected apply result");
+
+    const orphan = result.orphanWorktrees.find(
+      (o) => canonicalizePath(o.path) === canonicalizePath(outside),
+    );
+    expect(orphan).toBeDefined();
+    expect(orphan?.removed).toBe(false);
+    expect(orphan?.blockers?.join("; ")).toContain("escapes configured root");
+    expect(fs.existsSync(outside)).toBe(true);
+
+    git(cacheRow!.mirror_path, "worktree", "remove", "--force", outside);
   });
 
 });
