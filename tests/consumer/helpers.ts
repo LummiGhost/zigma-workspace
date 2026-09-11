@@ -6,6 +6,7 @@
  * first test layer in this repo that never runs provider code in-process.
  */
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -52,13 +53,47 @@ function newestMtime(dir: string): number {
 let distReady: Promise<void> | null = null;
 
 /**
+ * Serialize dist builds across vitest workers: each test file runs in its
+ * own thread, and the module-scoped memo does not dedupe across workers.
+ * A concurrent `pnpm build` (clean && tsc) would delete another worker's
+ * in-flight output, so the build runs under an exclusive lock file.
+ */
+async function withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lockPath = path.join(
+    os.tmpdir(),
+    `zigma-dist-build-${crypto.createHash("sha1").update(repoRoot).digest("hex")}.lock`,
+  );
+  const deadline = Date.now() + 600_000;
+  for (;;) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        return await fn();
+      } finally {
+        fs.closeSync(fd);
+        fs.rmSync(lockPath, { force: true });
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if (Date.now() > deadline) {
+        // A crashed builder could leave a stale lock; break it rather than
+        // hanging every consumer test forever.
+        fs.rmSync(lockPath, { force: true });
+        throw new Error("Timed out waiting for the concurrent dist build lock");
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+}
+
+/**
  * Build dist/cli/index.js when it is missing or older than any source file.
  * `pnpm check` builds before tests, so this is a no-op there; standalone
  * `pnpm test:unit` runs stay correct without a manual build step.
  */
 export function ensureBuiltDist(): Promise<void> {
   if (distReady) return distReady;
-  distReady = (async () => {
+  distReady = withBuildLock(async () => {
     const needsBuild =
       !fs.existsSync(distCli) ||
       newestMtime(path.join(repoRoot, "src")) > fs.statSync(distCli).mtimeMs;
@@ -73,7 +108,7 @@ export function ensureBuiltDist(): Promise<void> {
     if (result.status !== 0) {
       throw new Error(`dist build failed:\n${result.stdout}\n${result.stderr}`);
     }
-  })();
+  });
   return distReady;
 }
 

@@ -69,7 +69,10 @@ export function validateProviderContract(
     );
   }
 
-  const caps = new Set(info.capabilities);
+  // A malformed contract (missing/foreign capability list) must fail closed
+  // with a typed error, not a raw TypeError, so in-process consumers get the
+  // same taxonomy as CLI routing.
+  const caps = new Set(Array.isArray(info.capabilities) ? info.capabilities : []);
   const missing = required.filter((c) => !caps.has(c));
   if (missing.length > 0) {
     throw new ZigmaError(

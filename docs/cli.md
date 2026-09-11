@@ -143,11 +143,13 @@ zigma-workspace negotiate --role managed --json
 }
 ```
 
-不支持的 `--role`、provider 不符、契约版本不符或能力缺失时，输出
-`ok: false` error envelope（`PROVIDER_MISMATCH` /
-`CONTRACT_VERSION_UNSUPPORTED` / `MANAGED_CAPABILITIES_MISSING` /
-`INVALID_INPUT`）并以退出码 1 结束。该命令与 `contract-info` 一样不产生
-任何副作用，也不需要 state directory。
+不支持的 `--role` 输出 `ok: false` error envelope（`INVALID_INPUT`）并以
+退出码 1 结束。CLI 校验的是自身 `contract-info` 的输出，因此 provider
+不符、版本不符或能力缺失在 CLI 路径上不可达；这三个错误码
+（`PROVIDER_MISMATCH` / `CONTRACT_VERSION_UNSUPPORTED` /
+`MANAGED_CAPABILITIES_MISSING`）由校验模块对消费者传入的外部 contract
+对象抛出。该命令与 `contract-info` 一样不产生任何副作用，也不需要 state
+directory。
 
 同一校验逻辑以生产模块 `src/core/negotiation.ts` 导出
 （`validateProviderContract`、`MANAGED_REQUIRED_CAPABILITIES`、

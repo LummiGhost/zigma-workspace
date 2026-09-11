@@ -360,6 +360,7 @@ describe("crash recovery over the built CLI", () => {
   let fx: LifecycleFixture;
   let baseCommit = "";
   let runWs = "";
+  let runPath = "";
   let jobWs = "";
   let jobPath = "";
   const opJob = "run:run-recover:job:impl:attempt:1:create";
@@ -388,6 +389,7 @@ describe("crash recovery over the built CLI", () => {
       "--json",
     ]);
     runWs = str(run.workspace_id);
+    runPath = str(run.path);
   });
 
   it("prepares the attempt, then a simulated crash leaves the journal started", () => {
@@ -440,6 +442,41 @@ describe("crash recovery over the built CLI", () => {
 
     const list = okData(fx, ["list", "--json"]) as unknown as Array<Record<string, unknown>>;
     expect(list.filter((w) => w.branch === "job/run-recover/impl/a1")).toHaveLength(1);
+  });
+
+  it("adoption CAS rejects a stale expected head on an existing attempt workspace", () => {
+    // Advance the Run workspace so a new head is in its history…
+    const head = git(runPath, "rev-parse", "HEAD");
+    writeFile(runPath, "advance.txt", "advance\n");
+    const commit = okData(fx, [
+      "commit",
+      "--operation-id", "run:run-recover:advance",
+      "--workspace", runWs,
+      "--message", "advance run head",
+      "--expected-head", head,
+      "--json",
+    ]);
+    const newHead = str(commit.head_commit);
+
+    // …then request attempt 1 from that head: the branch is already owned by
+    // the existing attempt workspace created from the old head, so the
+    // adoption CAS must fail closed.
+    const r = cli(fx, [
+      "prepare-job",
+      "--operation-id", "run:run-recover:job:impl:attempt:1:stale-adopt",
+      "--run", "run-recover",
+      "--run-workspace", runWs,
+      "--job", JOB_ID,
+      "--attempt", "1",
+      "--expected-head", newHead,
+      "--json",
+    ]);
+    expect(r.status).toBe(1);
+    const env = parseEnvelope(r.stdout);
+    expect(env.error?.code).toBe("WORKSPACE_HEAD_CONFLICT");
+    const details = env.error?.details as { expected?: string; actual?: string } | undefined;
+    expect(details?.expected).toBe(newHead);
+    expect(details?.actual).toBe(baseCommit);
   });
 });
 

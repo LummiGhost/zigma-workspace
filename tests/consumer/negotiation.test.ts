@@ -90,6 +90,15 @@ describe("validateProviderContract (production module)", () => {
     const { managed_supported: _s, managed_required_capabilities: _r, ...withoutOptional } = FULL_INFO;
     expect(validateProviderContract(withoutOptional).supported).toBe(true);
   });
+
+  it("fails closed with a typed error on a malformed contract without a capability list", () => {
+    const { capabilities: _c, ...withoutCaps } = FULL_INFO;
+    const err = expectCode(
+      () => validateProviderContract(withoutCaps as never),
+      "MANAGED_CAPABILITIES_MISSING",
+    );
+    expect(err.details?.missing_capabilities).toEqual([...MANAGED_REQUIRED_CAPABILITIES]);
+  });
 });
 
 describe("contract-info and negotiate over the built CLI", () => {
