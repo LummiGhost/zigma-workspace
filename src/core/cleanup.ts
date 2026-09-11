@@ -1,5 +1,4 @@
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import type {
@@ -23,7 +22,7 @@ import {
 } from "../db/queries.js";
 import { emitWorkspaceEvent } from "../core/events.js";
 import { transition } from "./state-machine.js";
-import { canonicalizePath, isWorktreeRegistered, removeWorktree, listWorktrees } from "../git/index.js";
+import { canonicalizePath, isWorktreeRegistered, removeWorktree, listWorktrees, resolveRealPath } from "../git/index.js";
 import { getRepositoryCacheByUrl } from "../db/queries.js";
 import { assertWorkspaceRootBoundary } from "./isolation-policy.js";
 
@@ -172,8 +171,9 @@ export function detectOrphanWorktrees(
           (r) => canonicalizePath(r.path) === canonicalizePath(wt.path)
         );
         orphans.push({
-          // Report host-native paths (git porcelain emits forward slashes).
-          path: path.normalize(wt.path),
+          // Report the on-disk long form so consumers see the same path the
+          // registry uses, not a git-porcelain 8.3 alias like RUNNER~1.
+          path: resolveRealPath(wt.path),
           branch: wt.branch,
           commit: wt.commit,
           registeredWorkspaceId: registeredWorkspace?.id,
