@@ -292,6 +292,12 @@ describe("gc apply", () => {
     lockWorkspace(ctx.db, blocked.id, "write", "still-here");
     backdateUpdatedAt(ctx.db, blocked.id, 30);
 
+    // Capture the canonical form while the directory still exists:
+    // canonicalizePath expands 8.3 short aliases (short TMP env on CI)
+    // via realpathSync.native, but falls back to path.resolve once the
+    // path is gone, which leaves the alias unexpanded.
+    const expectedOrphanPath = canonicalizePath(orphanPath);
+
     const result = garbageCollect(ctx.db, ctx.config, { apply: true });
     expect(result.applied).toBe(true);
     if (!result.applied) throw new Error("expected apply result");
@@ -299,10 +305,9 @@ describe("gc apply", () => {
     expect(result.results.some((r) => r.workspaceId === blocked.id)).toBe(false);
     expect(fs.existsSync(blocked.path)).toBe(true);
 
-    // Path forms differ on Windows: registry rows may hold 8.3 aliases
-    // (short TMP env on CI) while porcelain/realpath emit the long form.
+    expect(result.orphanWorktrees.length).toBeGreaterThan(0);
     const orphan = result.orphanWorktrees.find(
-      (o) => canonicalizePath(o.path) === canonicalizePath(orphanPath),
+      (o) => canonicalizePath(o.path) === expectedOrphanPath,
     );
     expect(orphan).toBeDefined();
     expect(orphan?.removed).toBe(true);
