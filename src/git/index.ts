@@ -95,7 +95,12 @@ export function cloneMirror(repoUrl: string, mirrorPath: string): void {
   }
   fs.mkdirSync(path.dirname(mirrorPath), { recursive: true });
   const tmpPath = `${mirrorPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
-  runGit(["clone", "--bare", "--mirror", repoUrl, tmpPath]);
+  try {
+    runGit(["clone", "--bare", "--mirror", repoUrl, tmpPath]);
+  } catch (err) {
+    fs.rmSync(tmpPath, { recursive: true, force: true });
+    throw err;
+  }
   try {
     fs.renameSync(tmpPath, mirrorPath);
   } catch (err) {
@@ -143,9 +148,30 @@ export function resolveRef(mirrorPath: string, ref: string): string {
  * holder's pid so a stale lock left by a crashed process is broken instead
  * of blocking forever.
  */
+function readLockPid(lockDir: string): number | undefined {
+  try {
+    const pid = Number.parseInt(fs.readFileSync(path.join(lockDir, "pid"), "utf8").trim(), 10);
+    return Number.isInteger(pid) && pid !== process.pid ? pid : undefined;
+  } catch {
+    // pid file not written yet (winner just created the dir) — treat as alive.
+    return undefined;
+  }
+}
+
+function pidIsDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (err) {
+    // ESRCH: no such process. EPERM: exists but not ours — treat as alive.
+    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
 function withWorktreeLock<T>(mirrorPath: string, fn: () => T): T {
   const lockDir = `${mirrorPath}.worktree-lock`;
   const deadline = Date.now() + 300_000;
+  let brokeUnparseableLock = false;
   for (;;) {
     try {
       fs.mkdirSync(lockDir);
@@ -160,26 +186,30 @@ function withWorktreeLock<T>(mirrorPath: string, fn: () => T): T {
       // (the holder's rmSync mid-flight) surfaces as EPERM instead of EEXIST.
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "EEXIST" && code !== "EPERM") throw err;
-      let holderAlive = true;
-      try {
-        const pid = Number.parseInt(fs.readFileSync(path.join(lockDir, "pid"), "utf8").trim(), 10);
-        if (Number.isInteger(pid) && pid !== process.pid) {
-          try {
-            process.kill(pid, 0);
-          } catch {
-            holderAlive = false;
-          }
+
+      const pid = readLockPid(lockDir);
+      const holderDead = pid !== undefined && pidIsDead(pid);
+
+      if (holderDead) {
+        // Break the stale lock. Re-verify the pid immediately before removing
+        // so a successor that already broke and re-created the lock (ABA) is
+        // not deleted out from under its new holder.
+        const recheck = readLockPid(lockDir);
+        if (recheck === pid && pidIsDead(pid)) {
+          fs.rmSync(lockDir, { recursive: true, force: true });
         }
-      } catch {
-        // pid file not written yet (winner just created the dir) — treat as alive.
-        holderAlive = true;
-      }
-      if (!holderAlive) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
         continue;
       }
       if (Date.now() > deadline) {
-        fs.rmSync(lockDir, { recursive: true, force: true });
+        // A lock whose pid file was never written (holder crashed between
+        // mkdir and write) can never be verified dead: break it once.
+        if (pid === undefined && !brokeUnparseableLock) {
+          brokeUnparseableLock = true;
+          fs.rmSync(lockDir, { recursive: true, force: true });
+          continue;
+        }
+        // Do NOT remove a lock whose holder may still be alive: overlapping
+        // worktree mutations are exactly what this lock prevents.
         throw new GitError(`timed out waiting for worktree lock ${lockDir}`, "worktree lock", "");
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 50);
@@ -744,9 +774,11 @@ export function pushBranch(
 
 /**
  * Fetch a specific ref from origin in a mirror.
+ * --no-write-fetch-head keeps concurrent fetches on a shared mirror from
+ * contending on the FETCH_HEAD lock; no consumer reads FETCH_HEAD.
  */
 export function fetchRef(mirrorPath: string, ref: string): void {
-  runGit(["fetch", "origin", ref], mirrorPath);
+  runGit(["fetch", "origin", ref, "--no-write-fetch-head"], mirrorPath);
 }
 
 /**

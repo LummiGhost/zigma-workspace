@@ -129,6 +129,14 @@ export function assertChangedPathsContained(row: WorkspaceRow, files: string[]):
   }
 }
 
+function isTransientWalkError(err: unknown): boolean {
+  // A concurrent process (e.g. a losing repo-cache clone cleaning up its
+  // temp mirror) may delete entries mid-walk: ENOENT, or EPERM/EACCES when
+  // Windows surfaces a pending-delete state.
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "EPERM" || code === "EACCES";
+}
+
 function directorySize(root: string): number {
   if (!fs.existsSync(root)) return 0;
   let total = 0;
@@ -139,9 +147,7 @@ function directorySize(root: string): number {
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });
     } catch (err) {
-      // A concurrent process (e.g. a losing repo-cache clone cleaning up
-      // its temp mirror) may delete a queued directory mid-walk.
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      if (isTransientWalkError(err)) continue;
       throw err;
     }
     for (const entry of entries) {
@@ -150,7 +156,7 @@ function directorySize(root: string): number {
       try {
         stat = fs.lstatSync(candidate);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        if (isTransientWalkError(err)) continue;
         throw err;
       }
       if (stat.isSymbolicLink()) continue;

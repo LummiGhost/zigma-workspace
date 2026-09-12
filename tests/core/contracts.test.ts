@@ -125,6 +125,8 @@ afterEach(() => {
 // ── 1. Sequential Integration ───────────────────────────────────────────────
 
 describe("sequential integration of two Job workspaces into one target", () => {
+  // Spawns ~20 git subprocesses; 20s is exceeded under full-suite parallel
+  // load (observed timeouts on 16-core machines running all 32 test files).
   it("integrates two independent changesets in order into a shared target", () => {
     const ctx = setupRepo();
 
@@ -238,7 +240,7 @@ describe("sequential integration of two Job workspaces into one target", () => {
     });
     expect(resultA2.merged).toBe(false);
     expect(resultA2.resultingCommit).toBe(resultA2.previousTargetHead);
-  });
+  }, 120_000);
 });
 
 // ── 2. Same-Line Conflict & Target Recovery ─────────────────────────────────

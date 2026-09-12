@@ -112,11 +112,26 @@ export function ensureRepositoryCache(
       insertRepositoryCache(db, candidate);
       cacheRow = candidate;
     } catch (err) {
-      // repository_url is UNIQUE: a concurrent prepare-run won the insert.
-      // Adopt its row; any other failure propagates.
-      const winner = getRepositoryCacheByUrl(db, repoUrl);
-      if (!winner) throw err;
-      cacheRow = winner;
+      const sqliteCode = (err as { code?: string }).code;
+      if (sqliteCode === "SQLITE_CONSTRAINT_UNIQUE") {
+        // repository_url is UNIQUE: a concurrent prepare-run won the insert.
+        // Adopt its row.
+        const winner = getRepositoryCacheByUrl(db, repoUrl);
+        if (!winner) throw err;
+        cacheRow = winner;
+      } else if (sqliteCode === "SQLITE_BUSY") {
+        // Transient write contention on the shared registry: retry briefly,
+        // then adopt or propagate.
+        let winner: RepositoryCacheRow | undefined;
+        for (let attempt = 0; attempt < 20 && !winner; attempt++) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 50);
+          winner = getRepositoryCacheByUrl(db, repoUrl);
+        }
+        if (!winner) throw err;
+        cacheRow = winner;
+      } else {
+        throw err;
+      }
     }
   }
 
