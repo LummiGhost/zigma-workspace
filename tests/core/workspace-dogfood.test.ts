@@ -27,6 +27,8 @@ afterEach(() => {
 });
 
 describe("real local Git workspace isolation", () => {
+  // Two worktree creations + cleanup: exceeds the default 20s under
+  // full-suite parallel load.
   it("isolates worktrees and enforces manifest filtering for diff/snapshot/cleanup", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "zigma-workspace-dogfood-"));
     tempDirs.push(root);
@@ -102,5 +104,5 @@ describe("real local Git workspace isolation", () => {
     expect(secondDiff.untrackedFiles).toEqual(["src/second.txt"]);
     expect(fs.existsSync(second.path)).toBe(true);
     expect(fs.existsSync(path.join(second.path, "src", "first.txt"))).toBe(false);
-  });
+  }, 120_000);
 });

@@ -136,6 +136,9 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const db = new Database(config.dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Concurrent CLI processes share one registry.db; WAL allows one writer at
+  // a time, so wait briefly instead of failing with SQLITE_BUSY.
+  db.pragma("busy_timeout = 5000");
   db.exec(SCHEMA_SQL);
   migrateWorkspaceEventActor(db);
   migrateStatusColumn(db);
