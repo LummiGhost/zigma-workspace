@@ -426,13 +426,22 @@ zigma-workspace integration-lock --workspace <id> --action <acquire|heartbeat|re
 ### `prepare-run`
 
 ```text
-zigma-workspace prepare-run --operation-id <id> --run <runId> --repo <url> --base <ref> [--mode <writable|read-only>] [--expected-base <sha>] [--json]
+zigma-workspace prepare-run --operation-id <id> --run <runId> --repo <url> --base <ref> [--mode <writable|read-only>] [--expected-base <sha>] [--retention-success <cleanup|retain>] [--retention-failure <cleanup|retain>] [--retention-blocked <cleanup|retain>] [--json]
 ```
 
 创建（或采用）分支 `flow/<runId>` 的 Run workspace 并绑定 flow run。data 字段：
 `operation_id`、`run_id`、`workspace_id`、`path`、`branch`、`base_ref`、
-`base_commit`、`mode`、`status`、`created_at`。`--expected-base` 提供创建前
+`base_commit`、`mode`、`status`、`created_at`；传入 retention 标志时额外回显
+`retention`（`success`/`failure`/`blocked`，值 `cleanup` 或 `retain`）。`--expected-base` 提供创建前
 CAS；相同 operation id 重试回放首次结果，崩溃重试采用既有 workspace。
+
+`--retention-*` 标志持久化到 workspace row，按结果类别覆盖 gc 的全局
+`retainFailedDays` 策略：`FAILED`/`CLEANUP_FAILED` 采用 `failure`，
+`CONFLICT` 采用 `blocked`，`MERGED` 采用 `success`。行级值为 `retain` 时
+gc 永不回收；为 `cleanup` 时不等保留期直接回收；未设置时回退到全局策略。
+retention 参与 operation-id 幂等哈希：同一 operation id 以不同 retention
+重放会以 `OPERATION_ID_CONFLICT` 失败关闭。采用既有分支时按新输入的
+retention 更新行。
 
 ### `prepare-job`
 

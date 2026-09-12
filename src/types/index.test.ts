@@ -73,6 +73,9 @@ describe("Types - workflow execution context", () => {
         status: "RUNNING",
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
+        retention_success: null,
+        retention_failure: null,
+        retention_blocked: null,
       };
       expect(row.workflow_run_id).toBe("wr_001");
       expect(row.job_id).toBe("job_001");
@@ -99,6 +102,9 @@ describe("Types - workflow execution context", () => {
         status: "CREATED",
         created_at: "2025-01-01T00:00:00.000Z",
         updated_at: "2025-01-01T00:00:00.000Z",
+        retention_success: null,
+        retention_failure: null,
+        retention_blocked: null,
       };
       expect(row.workflow_run_id).toBeNull();
       expect(row.job_id).toBeNull();

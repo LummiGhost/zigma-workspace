@@ -338,4 +338,122 @@ describe("gc apply", () => {
     git(cacheRow!.mirror_path, "worktree", "remove", "--force", outside);
   });
 
+  describe("row-level retention", () => {
+    function makeWorkspaceWithRetention(
+      ctx: TestContext,
+      branch: string,
+      retention: { success?: "cleanup" | "retain"; failure?: "cleanup" | "retain"; blocked?: "cleanup" | "retain" },
+    ) {
+      return createWorkspace(ctx.db, ctx.config, {
+        repositoryUrl: ctx.repo,
+        baseRef: "main",
+        branch,
+        retention,
+      });
+    }
+
+    it("persists retention columns and echoes them on the row", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-retention-persist", {
+        success: "cleanup",
+        failure: "retain",
+        blocked: "retain",
+      });
+      expect(ws.retention).toEqual({
+        success: "cleanup",
+        failure: "retain",
+        blocked: "retain",
+      });
+      const row = getWorkspaceById(ctx.db, ws.id);
+      expect(row?.retention_success).toBe("cleanup");
+      expect(row?.retention_failure).toBe("retain");
+      expect(row?.retention_blocked).toBe("retain");
+    });
+
+    it("retention failure=retain keeps a FAILED workspace regardless of age", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-retain-failed", { failure: "retain" });
+      setStatus(ctx.db, ws.id, "FAILED");
+      backdateUpdatedAt(ctx.db, ws.id, 30);
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("retained");
+      expect(item?.action).toBe("skip");
+      expect(item?.reason).toContain("retain");
+    });
+
+    it("retention failure=cleanup collects a fresh FAILED workspace and cleans it on apply", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-clean-failed", { failure: "cleanup" });
+      setStatus(ctx.db, ws.id, "FAILED");
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("failed");
+      expect(item?.action).toBe("cleanup");
+      expect(item?.reason).toContain("cleanup");
+
+      const result = garbageCollect(ctx.db, ctx.config, { apply: true });
+      if (!result.applied) throw new Error("expected apply result");
+      const applied = result.results.find((r) => r.workspaceId === ws.id);
+      expect(applied?.action).toBe("cleaned");
+      expect(fs.existsSync(ws.path)).toBe(false);
+    });
+
+    it("retention blocked=retain keeps a CONFLICT workspace regardless of age", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-retain-conflict", { blocked: "retain" });
+      setStatus(ctx.db, ws.id, "CONFLICT");
+      backdateUpdatedAt(ctx.db, ws.id, 30);
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("retained");
+      expect(item?.action).toBe("skip");
+    });
+
+    it("retention success=retain keeps a MERGED workspace past ABANDON_DAYS", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-retain-merged", { success: "retain" });
+      setStatus(ctx.db, ws.id, "MERGED");
+      backdateUpdatedAt(ctx.db, ws.id, ABANDON_DAYS + 2);
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("retained");
+      expect(item?.action).toBe("skip");
+    });
+
+    it("retention success=cleanup releases a MERGED workspace before ABANDON_DAYS", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspaceWithRetention(ctx, "gc-clean-merged", { success: "cleanup" });
+      setStatus(ctx.db, ws.id, "MERGED");
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("abandoned");
+      expect(item?.action).toBe("cleanup");
+      expect(item?.reason).toContain("cleanup");
+    });
+
+    it("null retention falls back to the global retainFailedDays policy", () => {
+      const ctx = setupRepo();
+      const ws = makeWorkspace(ctx, "gc-retention-null");
+      setStatus(ctx.db, ws.id, "FAILED");
+      backdateUpdatedAt(ctx.db, ws.id, 30);
+
+      const plan = planGarbageCollection(ctx.db, ctx.config);
+      const item = plan.candidates.find((c) => c.workspaceId === ws.id);
+      expect(item?.class).toBe("failed");
+      expect(item?.action).toBe("cleanup");
+
+      const fresh = makeWorkspace(ctx, "gc-retention-null-fresh");
+      setStatus(ctx.db, fresh.id, "FAILED");
+      const plan2 = planGarbageCollection(ctx.db, ctx.config);
+      const item2 = plan2.candidates.find((c) => c.workspaceId === fresh.id);
+      expect(item2?.class).toBe("retained");
+      expect(item2?.action).toBe("skip");
+    });
+  });
 });

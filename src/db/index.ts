@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   mode TEXT NOT NULL DEFAULT 'writable',
   status TEXT NOT NULL DEFAULT 'CREATED',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  retention_success TEXT,
+  retention_failure TEXT,
+  retention_blocked TEXT
 );
 
 CREATE TABLE IF NOT EXISTS repository_caches (
@@ -111,6 +114,22 @@ function migrateWorkspaceEventActor(db: Database.Database): void {
   migrate();
 }
 
+function migrateWorkspaceRetentionColumns(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    const columns = db.pragma("table_info(workspaces)") as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "retention_success")) {
+      db.exec("ALTER TABLE workspaces ADD COLUMN retention_success TEXT");
+    }
+    if (!columns.some((column) => column.name === "retention_failure")) {
+      db.exec("ALTER TABLE workspaces ADD COLUMN retention_failure TEXT");
+    }
+    if (!columns.some((column) => column.name === "retention_blocked")) {
+      db.exec("ALTER TABLE workspaces ADD COLUMN retention_blocked TEXT");
+    }
+  });
+  migrate();
+}
+
 export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   const existing = _dbMap.get(config.dbPath);
   if (existing) return existing;
@@ -120,6 +139,7 @@ export function openDb(config: ZigmaWorkspaceConfig): Database.Database {
   db.exec(SCHEMA_SQL);
   migrateWorkspaceEventActor(db);
   migrateStatusColumn(db);
+  migrateWorkspaceRetentionColumns(db);
   _dbMap.set(config.dbPath, db);
   return db;
 }

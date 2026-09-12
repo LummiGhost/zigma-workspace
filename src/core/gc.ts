@@ -112,10 +112,24 @@ function classifyWorkspace(
       const hasGcAttempt = listOperationJournalForWorkspace(db, row.id).some(
         (j) => j.operation_id.startsWith("gc:"),
       );
+      // Row-level retention overrides the global policy per result class:
+      // CONFLICT follows the blocked policy, FAILED/CLEANUP_FAILED follow the
+      // failure policy. A gc-initiated cleanup that failed is always retried.
+      const rowRetention = row.status === "CONFLICT"
+        ? row.retention_blocked
+        : row.retention_failure;
       if (hasGcAttempt && row.status === "CLEANUP_FAILED") {
         cls = "failed";
         action = "cleanup";
         reason = "retry of failed gc cleanup";
+      } else if (rowRetention === "cleanup") {
+        cls = "failed";
+        action = "cleanup";
+        reason = `row retention for ${row.status} is cleanup`;
+      } else if (rowRetention === "retain") {
+        cls = "retained";
+        action = "skip";
+        reason = `row retention for ${row.status} is retain`;
       } else if (age >= (config.retainFailedDays ?? 0)) {
         cls = "failed";
         action = "cleanup";
@@ -126,7 +140,19 @@ function classifyWorkspace(
         reason = `status ${row.status} retained for ${Math.max(0, (config.retainFailedDays ?? 0) - age)} more day(s)`;
       }
     } else if (STALE_STATUSES.has(row.status)) {
-      if (age >= ABANDON_DAYS) {
+      // MERGED is the success result class; a row-level success policy of
+      // retain keeps the workspace indefinitely, cleanup releases it without
+      // waiting out the abandon threshold.
+      const rowRetention = row.status === "MERGED" ? row.retention_success : null;
+      if (rowRetention === "retain") {
+        cls = "retained";
+        action = "skip";
+        reason = `row retention for ${row.status} is retain`;
+      } else if (rowRetention === "cleanup") {
+        cls = "abandoned";
+        action = "cleanup";
+        reason = `row retention for ${row.status} is cleanup`;
+      } else if (age >= ABANDON_DAYS) {
         cls = "abandoned";
         action = "cleanup";
         reason = `no active lock and older than ${ABANDON_DAYS} days`;

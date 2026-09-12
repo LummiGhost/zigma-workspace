@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS workspaces (
   mode TEXT NOT NULL DEFAULT 'writable',
   status TEXT NOT NULL DEFAULT 'created',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  retention_success TEXT,
+  retention_failure TEXT,
+  retention_blocked TEXT
 );
 `;
 
@@ -41,6 +44,9 @@ const baseRow = {
   status: "active",
   created_at: "2025-01-01T00:00:00.000Z",
   updated_at: "2025-01-01T00:00:00.000Z",
+  retention_success: null,
+  retention_failure: null,
+  retention_blocked: null,
 };
 
 describe("Workspace core - workflow execution context", () => {

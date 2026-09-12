@@ -7,6 +7,7 @@ import type {
   CreateWorkspaceInput,
   BindWorkspaceRunInput,
   WorkspaceManifest,
+  WorkspaceRetention,
   ZigmaWorkspaceConfig,
   WorkspaceRow,
   RepositoryCacheRow,
@@ -69,6 +70,20 @@ function rowToWorkspace(row: WorkspaceRow): Workspace {
     status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    retention: retentionFromRow(row),
+  };
+}
+
+export function retentionFromRow(row: WorkspaceRow): WorkspaceRetention | undefined {
+  if (
+    row.retention_success === null
+    && row.retention_failure === null
+    && row.retention_blocked === null
+  ) return undefined;
+  return {
+    ...(row.retention_success !== null ? { success: row.retention_success as "cleanup" | "retain" } : {}),
+    ...(row.retention_failure !== null ? { failure: row.retention_failure as "cleanup" | "retain" } : {}),
+    ...(row.retention_blocked !== null ? { blocked: row.retention_blocked as "cleanup" | "retain" } : {}),
   };
 }
 
@@ -186,6 +201,9 @@ export function createWorkspace(
     status: "CREATED",
     created_at: ts,
     updated_at: ts,
+    retention_success: input.retention?.success ?? null,
+    retention_failure: input.retention?.failure ?? null,
+    retention_blocked: input.retention?.blocked ?? null,
   };
 
   insertWorkspace(db, row);

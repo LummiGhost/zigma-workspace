@@ -18,10 +18,11 @@ import {
   getOperationJournal,
   updateOperationJournalStatus,
   updateOperationJournalWorkspace,
+  updateWorkspaceRetention,
   listWorkspaces,
   getWorkspaceById,
 } from "../db/queries.js";
-import { createWorkspace, bindRun, ensureRepositoryCache } from "./workspace.js";
+import { createWorkspace, bindRun, ensureRepositoryCache, retentionFromRow } from "./workspace.js";
 import { assertWorkspaceBoundary, configForWorkspaceDatabase } from "./isolation-policy.js";
 import { checkGitAvailable, getHeadCommit, isAncestor, resolveRef } from "../git/index.js";
 
@@ -139,6 +140,7 @@ function rowToRunHandle(row: WorkspaceRow, operationId: string, runId: string): 
     mode: row.mode as "read-only" | "writable",
     status: row.status as RunWorkspaceHandle["status"],
     createdAt: row.created_at,
+    retention: retentionFromRow(row),
   };
 }
 
@@ -203,6 +205,7 @@ export function prepareRun(
     expectedBaseCommit: input.expectedBaseCommit ?? null,
     allowedPaths: input.allowedPaths ?? null,
     deniedPaths: input.deniedPaths ?? null,
+    retention: input.retention ?? null,
   };
   const inputHash = hashInput(canonicalInput);
 
@@ -234,9 +237,25 @@ export function prepareRun(
         );
       }
     }
-    const handle = rowToRunHandle(existing, operationId, runId);
-    startJournal(db, operationId, existing.id, "prepare_run", inputHash, now());
-    recordCompleted(db, operationId, existing.id, "prepare_run", inputHash, handle, now());
+    let adopted = existing;
+    if (input.retention !== undefined) {
+      const next = {
+        success: input.retention.success ?? null,
+        failure: input.retention.failure ?? null,
+        blocked: input.retention.blocked ?? null,
+      };
+      if (
+        adopted.retention_success !== next.success
+        || adopted.retention_failure !== next.failure
+        || adopted.retention_blocked !== next.blocked
+      ) {
+        updateWorkspaceRetention(db, adopted.id, next, now());
+        adopted = getWorkspaceById(db, adopted.id) ?? adopted;
+      }
+    }
+    const handle = rowToRunHandle(adopted, operationId, runId);
+    startJournal(db, operationId, adopted.id, "prepare_run", inputHash, now());
+    recordCompleted(db, operationId, adopted.id, "prepare_run", inputHash, handle, now());
     return handle;
   }
 
@@ -263,6 +282,7 @@ export function prepareRun(
       flowRunId: runId,
       allowedPaths: input.allowedPaths,
       deniedPaths: input.deniedPaths,
+      retention: input.retention,
     });
 
     bindRun(db, { workspaceId: workspace.id, flowRunId: runId });

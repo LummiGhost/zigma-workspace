@@ -1373,6 +1373,9 @@ program
   .requiredOption("--base <ref>", "Base git ref (branch, tag, or commit)")
   .option("--mode <mode>", "Workspace mode: writable or read-only", "writable")
   .option("--expected-base <sha>", "CAS: fail unless the base ref resolves to this commit")
+  .option("--retention-success <policy>", "Retention for successful runs: cleanup or retain")
+  .option("--retention-failure <policy>", "Retention for failed runs: cleanup or retain")
+  .option("--retention-blocked <policy>", "Retention for blocked runs: cleanup or retain")
   .option("--json", "Output JSON")
   .action(
     async (opts: {
@@ -1382,6 +1385,9 @@ program
       base: string;
       mode: string;
       expectedBase?: string;
+      retentionSuccess?: string;
+      retentionFailure?: string;
+      retentionBlocked?: string;
       json?: boolean;
     }) => {
       const useJson = opts.json ?? false;
@@ -1390,6 +1396,25 @@ program
         if (opts.mode !== "writable" && opts.mode !== "read-only") {
           outputError("INVALID_INPUT", `Invalid mode "${opts.mode}". Must be "writable" or "read-only"`, useJson);
         }
+        for (const [label, value] of [
+          ["retention-success", opts.retentionSuccess],
+          ["retention-failure", opts.retentionFailure],
+          ["retention-blocked", opts.retentionBlocked],
+        ] as const) {
+          if (value !== undefined && value !== "cleanup" && value !== "retain") {
+            outputError("INVALID_INPUT", `Invalid ${label} "${value}". Must be "cleanup" or "retain"`, useJson);
+          }
+        }
+        const retention =
+          opts.retentionSuccess !== undefined
+          || opts.retentionFailure !== undefined
+          || opts.retentionBlocked !== undefined
+            ? {
+                ...(opts.retentionSuccess !== undefined ? { success: opts.retentionSuccess as "cleanup" | "retain" } : {}),
+                ...(opts.retentionFailure !== undefined ? { failure: opts.retentionFailure as "cleanup" | "retain" } : {}),
+                ...(opts.retentionBlocked !== undefined ? { blocked: opts.retentionBlocked as "cleanup" | "retain" } : {}),
+              }
+            : undefined;
         const { config, db } = setup(globalOpts.stateDir);
         const handle = prepareRun(db, config, {
           operationId: opts.operationId,
@@ -1398,6 +1423,7 @@ program
           baseRef: opts.base,
           mode: opts.mode as "writable" | "read-only",
           expectedBaseCommit: opts.expectedBase,
+          ...(retention !== undefined ? { retention } : {}),
         });
         outputOk(
           {
@@ -1411,6 +1437,7 @@ program
             mode: handle.mode,
             status: handle.status,
             created_at: handle.createdAt,
+            ...(handle.retention !== undefined ? { retention: handle.retention } : {}),
           },
           useJson
         );

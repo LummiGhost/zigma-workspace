@@ -145,6 +145,7 @@ interface CreateWorkspaceInput {
   projectId?: string;
   taskId?: string;
   flowRunId?: string;
+  retention?: WorkspaceRetention; // { success?, failure?, blocked? }, each "cleanup" | "retain"
 }
 ```
 
@@ -326,6 +327,7 @@ interface PrepareRunInput {
   expectedBaseCommit?: string;
   allowedPaths?: string[];
   deniedPaths?: string[];
+  retention?: WorkspaceRetention; // { success?, failure?, blocked? }, each "cleanup" | "retain"
 }
 
 interface RunWorkspaceHandle {
@@ -339,6 +341,7 @@ interface RunWorkspaceHandle {
   mode: "read-only" | "writable";
   status: WorkspaceState;
   createdAt: string;
+  retention?: WorkspaceRetention;
 }
 ```
 
@@ -346,6 +349,10 @@ interface RunWorkspaceHandle {
 operation id 回放首次结果；崩溃后重试采用已拥有该分支的 workspace。
 `expectedBaseCommit` 与 `baseRef` 解析结果不一致时抛出
 `WORKSPACE_HEAD_CONFLICT`，且不留下部分状态。
+
+`retention` 按结果类别写入 workspace row（`success`/`failure`/`blocked`），
+由 gc 优先于全局 `retainFailedDays` 采用（见 CLI 文档）。retention 参与
+operation-id 幂等哈希；采用既有分支时按新输入的 retention 更新行。
 
 ### `prepareJob(db, config, input): JobWorkspaceHandle`
 
