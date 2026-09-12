@@ -135,9 +135,24 @@ function directorySize(root: string): number {
   const pending = [root];
   while (pending.length > 0) {
     const current = pending.pop()!;
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(current, { withFileTypes: true });
+    } catch (err) {
+      // A concurrent process (e.g. a losing repo-cache clone cleaning up
+      // its temp mirror) may delete a queued directory mid-walk.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    for (const entry of entries) {
       const candidate = path.join(current, entry.name);
-      const stat = fs.lstatSync(candidate);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(candidate);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw err;
+      }
       if (stat.isSymbolicLink()) continue;
       if (stat.isDirectory()) pending.push(candidate);
       else total += stat.size;

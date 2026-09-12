@@ -83,20 +83,36 @@ export function hashRepoUrl(url: string): string {
 /**
  * Clone a repository as a bare mirror into mirrorPath.
  * If mirrorPath already exists, skip.
+ *
+ * Concurrency-safe: concurrent processes targeting the same mirrorPath
+ * (shared repo cache) clone into a unique temp directory and then rename it
+ * into place. The final path therefore only ever holds a complete mirror —
+ * the loser of the populate race discards its clone and reuses the winner's.
  */
 export function cloneMirror(repoUrl: string, mirrorPath: string): void {
   if (fs.existsSync(mirrorPath)) {
     return;
   }
   fs.mkdirSync(path.dirname(mirrorPath), { recursive: true });
-  runGit(["clone", "--bare", "--mirror", repoUrl, mirrorPath]);
+  const tmpPath = `${mirrorPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+  runGit(["clone", "--bare", "--mirror", repoUrl, tmpPath]);
+  try {
+    fs.renameSync(tmpPath, mirrorPath);
+  } catch (err) {
+    fs.rmSync(tmpPath, { recursive: true, force: true });
+    if (!fs.existsSync(mirrorPath)) {
+      throw err;
+    }
+  }
 }
 
 /**
  * Fetch all refs in an existing mirror.
+ * --no-write-fetch-head keeps concurrent fetches on a shared mirror from
+ * contending on the FETCH_HEAD lock; no consumer reads FETCH_HEAD.
  */
 export function fetchMirror(mirrorPath: string): void {
-  runGit(["fetch", "--all"], mirrorPath);
+  runGit(["fetch", "--all", "--no-write-fetch-head"], mirrorPath);
 }
 
 /**
@@ -118,6 +134,60 @@ export function resolveRef(mirrorPath: string, ref: string): string {
 }
 
 /**
+ * Serialize worktree mutation on one bare mirror across processes.
+ *
+ * Concurrent `git worktree add`/`remove` against the same mirror race on
+ * git's shared worktrees admin dir (observed on Windows as "failed to read
+ * worktrees/<id>/commondir"). The lock is a directory (atomic mkdir, no open
+ * handles — file locks hit Windows pending-delete races) and records the
+ * holder's pid so a stale lock left by a crashed process is broken instead
+ * of blocking forever.
+ */
+function withWorktreeLock<T>(mirrorPath: string, fn: () => T): T {
+  const lockDir = `${mirrorPath}.worktree-lock`;
+  const deadline = Date.now() + 300_000;
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      try {
+        fs.writeFileSync(path.join(lockDir, "pid"), String(process.pid), "utf8");
+        return fn();
+      } finally {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+      }
+    } catch (err) {
+      // EPERM: on Windows, mkdir of a directory in pending-delete state
+      // (the holder's rmSync mid-flight) surfaces as EPERM instead of EEXIST.
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST" && code !== "EPERM") throw err;
+      let holderAlive = true;
+      try {
+        const pid = Number.parseInt(fs.readFileSync(path.join(lockDir, "pid"), "utf8").trim(), 10);
+        if (Number.isInteger(pid) && pid !== process.pid) {
+          try {
+            process.kill(pid, 0);
+          } catch {
+            holderAlive = false;
+          }
+        }
+      } catch {
+        // pid file not written yet (winner just created the dir) — treat as alive.
+        holderAlive = true;
+      }
+      if (!holderAlive) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > deadline) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        throw new GitError(`timed out waiting for worktree lock ${lockDir}`, "worktree lock", "");
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 50);
+    }
+  }
+}
+
+/**
  * Create a git worktree at workspacePath from a bare mirror,
  * checking out baseCommit and creating a new branch called branch.
  */
@@ -128,32 +198,36 @@ export function createWorktree(
   baseCommit: string
 ): void {
   fs.mkdirSync(path.dirname(workspacePath), { recursive: true });
-  // Use git worktree add -b <branch> <path> <commit>
-  runGit(
-    ["worktree", "add", "-b", branch, workspacePath, baseCommit],
-    mirrorPath
-  );
+  withWorktreeLock(mirrorPath, () => {
+    // Use git worktree add -b <branch> <path> <commit>
+    runGit(
+      ["worktree", "add", "-b", branch, workspacePath, baseCommit],
+      mirrorPath
+    );
+  });
 }
 
 /**
  * Remove a git worktree, both its directory and the worktree metadata from the mirror.
  */
 export function removeWorktree(mirrorPath: string, workspacePath: string): void {
-  if (fs.existsSync(workspacePath)) {
-    // Force-remove the worktree directory
-    try {
-      runGit(["worktree", "remove", "--force", workspacePath], mirrorPath);
-    } catch {
-      // If worktree remove fails (e.g., no longer registered), remove directory manually
-      fs.rmSync(workspacePath, { recursive: true, force: true });
+  withWorktreeLock(mirrorPath, () => {
+    if (fs.existsSync(workspacePath)) {
+      // Force-remove the worktree directory
+      try {
+        runGit(["worktree", "remove", "--force", workspacePath], mirrorPath);
+      } catch {
+        // If worktree remove fails (e.g., no longer registered), remove directory manually
+        fs.rmSync(workspacePath, { recursive: true, force: true });
+      }
     }
-  }
-  // Prune stale worktree references
-  try {
-    runGit(["worktree", "prune"], mirrorPath);
-  } catch {
-    // ignore prune errors
-  }
+    // Prune stale worktree references
+    try {
+      runGit(["worktree", "prune"], mirrorPath);
+    } catch {
+      // ignore prune errors
+    }
+  });
 }
 
 /**

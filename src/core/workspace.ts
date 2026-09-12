@@ -35,6 +35,7 @@ import {
   getDefaultBranch,
   configureWorktreeMode,
   addWorktreeExclude,
+  GitError,
 } from "../git/index.js";
 import {
   assertCapacityAvailable,
@@ -99,30 +100,46 @@ export function ensureRepositoryCache(
   let cacheRow = getRepositoryCacheByUrl(db, repoUrl);
 
   if (!cacheRow) {
-    const cacheId = `cache_${uuidv4()}`;
-    const urlHash = hashRepoUrl(repoUrl);
-    const mirrorPath = path.join(config.repoCacheDir, urlHash);
-
-    cacheRow = {
-      id: cacheId,
+    const candidate: RepositoryCacheRow = {
+      id: `cache_${uuidv4()}`,
       repository_url: repoUrl,
-      mirror_path: mirrorPath,
+      mirror_path: path.join(config.repoCacheDir, hashRepoUrl(repoUrl)),
       last_fetched_at: null,
       default_branch: null,
       status: "ready",
     };
-    insertRepositoryCache(db, cacheRow);
+    try {
+      insertRepositoryCache(db, candidate);
+      cacheRow = candidate;
+    } catch (err) {
+      // repository_url is UNIQUE: a concurrent prepare-run won the insert.
+      // Adopt its row; any other failure propagates.
+      const winner = getRepositoryCacheByUrl(db, repoUrl);
+      if (!winner) throw err;
+      cacheRow = winner;
+    }
   }
 
   const mirrorPath = cacheRow.mirror_path;
   assertPathWithin(config.repoCacheDir, mirrorPath, "Repository cache path");
 
-  // Clone if not present
-  if (!fs.existsSync(mirrorPath)) {
-    cloneMirror(repoUrl, mirrorPath);
-  } else {
-    // Fetch latest
-    fetchMirror(mirrorPath);
+  // Clone if not present. Concurrent prepare-runs share the mirror; git's
+  // per-ref locks can transiently fail a fetch, so retry lock contention
+  // briefly before surfacing it.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if (!fs.existsSync(mirrorPath)) {
+        cloneMirror(repoUrl, mirrorPath);
+      } else {
+        // Fetch latest
+        fetchMirror(mirrorPath);
+      }
+      break;
+    } catch (err) {
+      const lockContention = err instanceof GitError && /lock/i.test(`${err.message} ${err.stderr}`);
+      if (!lockContention || attempt >= 4) throw err;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 50);
+    }
   }
 
   const defaultBranch = getDefaultBranch(mirrorPath) ?? null;
