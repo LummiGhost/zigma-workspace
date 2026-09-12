@@ -28,6 +28,7 @@ export interface Workspace {
     | "ARCHIVED";
   createdAt: string;
   updatedAt: string;
+  retention?: WorkspaceRetention;
 }
 
 export interface RepositoryCache {
@@ -121,6 +122,14 @@ export interface WorkspaceManifest {
   denied_paths: string[];
 }
 
+export type RetentionAction = "cleanup" | "retain";
+
+export interface WorkspaceRetention {
+  success?: RetentionAction;
+  failure?: RetentionAction;
+  blocked?: RetentionAction;
+}
+
 export interface CreateWorkspaceInput {
   repositoryUrl: string;
   baseRef: string;
@@ -135,6 +144,7 @@ export interface CreateWorkspaceInput {
   agentId?: string;
   allowedPaths?: string[];
   deniedPaths?: string[];
+  retention?: WorkspaceRetention;
 }
 
 export interface BindWorkspaceRunInput {
@@ -176,6 +186,9 @@ export interface WorkspaceRow {
   status: string;
   created_at: string;
   updated_at: string;
+  retention_success: string | null;
+  retention_failure: string | null;
+  retention_blocked: string | null;
 }
 
 export interface RepositoryCacheRow {
@@ -406,6 +419,7 @@ export interface PrepareRunInput {
   expectedBaseCommit?: string;
   allowedPaths?: string[];
   deniedPaths?: string[];
+  retention?: WorkspaceRetention;
 }
 
 export interface RunWorkspaceHandle {
@@ -419,6 +433,7 @@ export interface RunWorkspaceHandle {
   mode: "read-only" | "writable";
   status: Workspace["status"];
   createdAt: string;
+  retention?: WorkspaceRetention;
 }
 
 export interface PrepareJobInput {

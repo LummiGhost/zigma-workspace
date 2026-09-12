@@ -417,6 +417,13 @@ Capability：`workspace-gc-v1`。命令 `gc --json`（默认 dry-run，零副作
   integration lock → `blocked`（永不打扰）；`FAILED`/`CONFLICT` 超过
   `retainFailedDays` → `failed`；`CLEANUP_FAILED` 且有历史 `gc:` 尝试 →
   无条件重试；非终态超过 14 天（硬编码 `ABANDON_DAYS`）且无锁 → `abandoned`。
+- 行级 retention 优先于全局策略（M4.1）：`prepare-run` 的
+  `--retention-success/failure/blocked` 持久化到 workspace row。按结果类别
+  取用——`FAILED`/`CLEANUP_FAILED` 用 `failure`，`CONFLICT` 用 `blocked`，
+  `MERGED` 用 `success`。行级 `retain` → 永不回收；行级 `cleanup` → 不等待
+  保留期立即回收；未设置（null）→ 回退全局 `retainFailedDays`/`ABANDON_DAYS`
+  逻辑，行为与无标志时完全一致。gc 发起的清理失败（`CLEANUP_FAILED` + 历史
+  `gc:` 尝试）始终优先重试，不被行级 `retain` 阻止。
 - `--apply` 先 sweep 过期锁行（`expires_at <= now`），再逐候选重新读取、
   重新评估、reconcile、strict-clean（`force: false`）；评估后出现新锁 →
   `skipped ("lock_conflict")`。孤儿 worktree（git 注册但 registry 无记录）

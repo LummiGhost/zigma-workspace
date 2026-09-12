@@ -17,12 +17,31 @@ export function insertWorkspace(db: Database.Database, row: WorkspaceRow): void 
     INSERT INTO workspaces
       (id, project_id, task_id, flow_run_id, workflow_run_id, job_id, step_id, agent_id,
        repository_url, base_ref, base_commit,
-       branch, path, mode, status, created_at, updated_at)
+       branch, path, mode, status, created_at, updated_at,
+       retention_success, retention_failure, retention_blocked)
     VALUES
       (@id, @project_id, @task_id, @flow_run_id, @workflow_run_id, @job_id, @step_id, @agent_id,
        @repository_url, @base_ref, @base_commit,
-       @branch, @path, @mode, @status, @created_at, @updated_at)
+       @branch, @path, @mode, @status, @created_at, @updated_at,
+       @retention_success, @retention_failure, @retention_blocked)
   `).run(row);
+}
+
+export function updateWorkspaceRetention(
+  db: Database.Database,
+  id: string,
+  retention: {
+    success: string | null;
+    failure: string | null;
+    blocked: string | null;
+  },
+  updatedAt: string,
+): void {
+  db.prepare(
+    `UPDATE workspaces
+     SET retention_success = ?, retention_failure = ?, retention_blocked = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(retention.success, retention.failure, retention.blocked, updatedAt, id);
 }
 
 export function getWorkspaceById(
