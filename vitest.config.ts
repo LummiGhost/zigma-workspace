@@ -8,6 +8,6 @@ export default defineConfig({
     // Native SQLite must not share Windows worker-thread teardown. One fork per
     // test file also bounds simultaneous Git/CLI processes on this platform.
     pool: process.platform === "win32" ? "forks" : "threads",
-    ...(process.platform === "win32" ? { maxWorkers: 1 } : {}),
+    ...(process.platform === "win32" ? { maxWorkers: 1, setupFiles: ["./tests/windows-worker-io.ts"] } : {}),
   },
 })
